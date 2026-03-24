@@ -400,6 +400,46 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
+  // LLM config from environment — allows embedding hosts to auto-configure the agent
+  app.get('/api/llm-config', (_req, res) => {
+    const anthropicKey = process.env.ANTHROPIC_API_KEY;
+    const openaiKey = process.env.OPENAI_API_KEY;
+    const geminiKey = process.env.GEMINI_API_KEY ?? process.env.GOOGLE_API_KEY;
+    const openrouterKey = process.env.OPENROUTER_API_KEY;
+
+    if (anthropicKey) {
+      res.json({
+        available: true,
+        provider: 'anthropic',
+        model: process.env.GITNEXUS_MODEL ?? 'claude-sonnet-4-20250514',
+        apiKey: anthropicKey,
+      });
+    } else if (openaiKey) {
+      res.json({
+        available: true,
+        provider: 'openai',
+        model: process.env.GITNEXUS_MODEL ?? 'gpt-4o',
+        apiKey: openaiKey,
+      });
+    } else if (geminiKey) {
+      res.json({
+        available: true,
+        provider: 'gemini',
+        model: process.env.GITNEXUS_MODEL ?? 'gemini-2.0-flash',
+        apiKey: geminiKey,
+      });
+    } else if (openrouterKey) {
+      res.json({
+        available: true,
+        provider: 'openrouter',
+        model: process.env.GITNEXUS_MODEL ?? '',
+        apiKey: openrouterKey,
+      });
+    } else {
+      res.json({ available: false });
+    }
+  });
+
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error('Unhandled error:', err);

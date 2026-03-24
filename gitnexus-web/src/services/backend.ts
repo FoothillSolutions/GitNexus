@@ -205,6 +205,29 @@ export const fetchProcessDetail = async (
 };
 
 /**
+ * Fetch LLM configuration from the backend (auto-configured from env vars).
+ * Returns null if no config is available or the endpoint doesn't exist.
+ */
+export const fetchLLMConfig = async (): Promise<{
+  available: boolean;
+  provider?: string;
+  model?: string;
+  apiKey?: string;
+} | null> => {
+  try {
+    const response = await fetchWithTimeout(
+      `${backendUrl}/api/llm-config`,
+      {},
+      PROBE_TIMEOUT_MS,
+    );
+    if (!response.ok) return null;
+    return response.json();
+  } catch {
+    return null;
+  }
+};
+
+/**
  * Fetch all functional-area clusters for a repository.
  */
 export const fetchClusters = async (repo: string): Promise<unknown> => {

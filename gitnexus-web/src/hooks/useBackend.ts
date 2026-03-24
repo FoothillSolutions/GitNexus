@@ -2,10 +2,13 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   probeBackend,
   fetchRepos,
+  fetchLLMConfig,
   setBackendUrl as setServiceUrl,
   getBackendUrl,
   type BackendRepo,
 } from '../services/backend';
+import { loadSettings, saveSettings } from '../core/llm/settings-service';
+import type { LLMProvider } from '../core/llm/types';
 
 // ── localStorage keys ────────────────────────────────────────────────────────
 
@@ -94,6 +97,32 @@ export function useBackend(): UseBackendResult {
           if (id === probeIdRef.current) {
             setRepos([]);
           }
+        }
+
+        // Auto-configure LLM from backend env vars if not already configured
+        try {
+          const llmConfig = await fetchLLMConfig();
+          if (llmConfig?.available && llmConfig.provider && llmConfig.apiKey) {
+            const current = loadSettings();
+            const provider = llmConfig.provider as LLMProvider;
+            const providerKey = provider === 'azure-openai' ? 'azureOpenAI' : provider;
+            const existingConfig = current[providerKey as keyof typeof current];
+            const hasKey = existingConfig && typeof existingConfig === 'object' && 'apiKey' in existingConfig && (existingConfig as { apiKey?: string }).apiKey;
+            if (!hasKey) {
+              const updated = {
+                ...current,
+                activeProvider: provider,
+                [providerKey]: {
+                  ...(typeof existingConfig === 'object' ? existingConfig : {}),
+                  apiKey: llmConfig.apiKey,
+                  model: llmConfig.model || undefined,
+                },
+              };
+              saveSettings(updated);
+            }
+          }
+        } catch {
+          // LLM config fetch is best-effort
         }
       } else {
         setRepos([]);
