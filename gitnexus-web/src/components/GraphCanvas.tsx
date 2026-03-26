@@ -27,8 +27,16 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     isAIHighlightsEnabled,
     toggleAIHighlights,
     animatedNodes,
+    isDiffMode,
+    diffChangedNodeIds,
   } = useAppState();
   const [hoveredNodeName, setHoveredNodeName] = useState<string | null>(null);
+
+  // Diff mode nodes (amber highlighting)
+  const effectiveDiffNodeIds = useMemo(() => {
+    if (!isDiffMode) return new Set<string>();
+    return diffChangedNodeIds;
+  }, [isDiffMode, diffChangedNodeIds]);
 
   const effectiveHighlightedNodeIds = useMemo(() => {
     if (!isAIHighlightsEnabled) return highlightedNodeIds;
@@ -96,6 +104,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     blastRadiusNodeIds: effectiveBlastRadiusNodeIds,
     animatedNodes: effectiveAnimatedNodes,
     visibleEdgeTypes,
+    diffNodeIds: effectiveDiffNodeIds,
   });
 
   // Expose focusNode to parent via ref

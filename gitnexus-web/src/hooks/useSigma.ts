@@ -57,6 +57,7 @@ interface UseSigmaOptions {
   blastRadiusNodeIds?: Set<string>;
   animatedNodes?: Map<string, NodeAnimation>;
   visibleEdgeTypes?: EdgeType[];
+  diffNodeIds?: Set<string>;
 }
 
 interface UseSigmaReturn {
@@ -131,6 +132,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   const selectedNodeRef = useRef<string | null>(null);
   const highlightedRef = useRef<Set<string>>(new Set());
   const blastRadiusRef = useRef<Set<string>>(new Set());
+  const diffNodesRef = useRef<Set<string>>(new Set());
   const animatedNodesRef = useRef<Map<string, NodeAnimation>>(new Map());
   const visibleEdgeTypesRef = useRef<EdgeType[] | null>(null);
   const layoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -141,10 +143,11 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   useEffect(() => {
     highlightedRef.current = options.highlightedNodeIds || new Set();
     blastRadiusRef.current = options.blastRadiusNodeIds || new Set();
+    diffNodesRef.current = options.diffNodeIds || new Set();
     animatedNodesRef.current = options.animatedNodes || new Map();
     visibleEdgeTypesRef.current = options.visibleEdgeTypes || null;
     sigmaRef.current?.refresh();
-  }, [options.highlightedNodeIds, options.blastRadiusNodeIds, options.animatedNodes, options.visibleEdgeTypes]);
+  }, [options.highlightedNodeIds, options.blastRadiusNodeIds, options.diffNodeIds, options.animatedNodes, options.visibleEdgeTypes]);
 
   // Animation loop for node effects
   useEffect(() => {
@@ -279,22 +282,25 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
         const currentSelected = selectedNodeRef.current;
         const highlighted = highlightedRef.current;
         const blastRadius = blastRadiusRef.current;
+        const diffNodes = diffNodesRef.current;
         const animatedNodes = animatedNodesRef.current;
         const hasHighlights = highlighted.size > 0;
         const hasBlastRadius = blastRadius.size > 0;
+        const hasDiffNodes = diffNodes.size > 0;
         const isQueryHighlighted = highlighted.has(node);
         const isBlastRadiusNode = blastRadius.has(node);
-        
+        const isDiffNode = diffNodes.has(node);
+
         // Apply animation effects FIRST (before other highlighting)
         const animation = animatedNodes.get(node);
         if (animation) {
           const now = Date.now();
           const elapsed = now - animation.startTime;
           const progress = Math.min(elapsed / animation.duration, 1);
-          
+
           // Calculate animation phase (0-1-0-1... oscillation)
           const phase = (Math.sin(progress * Math.PI * 4) + 1) / 2;
-          
+
           if (animation.type === 'pulse') {
             // Cyan pulse for search results
             const sizeMultiplier = 1.5 + phase * 0.8;
@@ -317,10 +323,35 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
             res.zIndex = 5;
             res.highlighted = true;
           }
-          
+
           return res;
         }
-        
+
+        // Diff mode highlighting (amber) — priority after animations
+        if (hasDiffNodes && !currentSelected) {
+          if (isDiffNode) {
+            res.color = '#f59e0b'; // Amber for changed symbols
+            res.size = (data.size || 8) * 1.6;
+            res.zIndex = 3;
+            res.highlighted = true;
+          } else if (isBlastRadiusNode) {
+            res.color = '#ef4444';
+            res.size = (data.size || 8) * 1.4;
+            res.zIndex = 2;
+            res.highlighted = true;
+          } else if (isQueryHighlighted) {
+            res.color = '#06b6d4';
+            res.size = (data.size || 8) * 1.2;
+            res.zIndex = 1;
+            res.highlighted = true;
+          } else {
+            res.color = dimColor(data.color, 0.15);
+            res.size = (data.size || 8) * 0.4;
+            res.zIndex = 0;
+          }
+          return res;
+        }
+
         // Blast radius takes priority (red highlighting)
         if (hasBlastRadius && !currentSelected) {
           if (isBlastRadiusNode) {
@@ -341,7 +372,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
           }
           return res;
         }
-        
+
         if (hasHighlights && !currentSelected) {
           if (isQueryHighlighted) {
             res.color = '#06b6d4';
@@ -397,23 +428,29 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
         const currentSelected = selectedNodeRef.current;
         const highlighted = highlightedRef.current;
         const blastRadius = blastRadiusRef.current;
-        const hasHighlights = highlighted.size > 0 || blastRadius.size > 0; // Check BOTH sets
-        
+        const diffNodes = diffNodesRef.current;
+        const hasDiffNodes = diffNodes.size > 0;
+        const hasHighlights = highlighted.size > 0 || blastRadius.size > 0 || hasDiffNodes;
+
         if (hasHighlights && !currentSelected) {
           const graph = graphRef.current;
           if (graph) {
             const [source, target] = graph.extremities(edge);
-            
-            // Check if nodes are in EITHER set
-            const isSourceActive = highlighted.has(source) || blastRadius.has(source);
-            const isTargetActive = highlighted.has(target) || blastRadius.has(target);
-            
+
+            // Check if nodes are in ANY active set
+            const isSourceDiff = diffNodes.has(source);
+            const isTargetDiff = diffNodes.has(target);
+            const isSourceActive = highlighted.has(source) || blastRadius.has(source) || isSourceDiff;
+            const isTargetActive = highlighted.has(target) || blastRadius.has(target) || isTargetDiff;
+
             const bothHighlighted = isSourceActive && isTargetActive;
             const oneHighlighted = isSourceActive || isTargetActive;
-            
+
             if (bothHighlighted) {
-              // If both nodes are in blast radius, use red edge
-              if (blastRadius.has(source) && blastRadius.has(target)) {
+              // Color by highest-priority set both ends share
+              if (isSourceDiff && isTargetDiff) {
+                res.color = '#f59e0b'; // Amber for diff edges
+              } else if (blastRadius.has(source) && blastRadius.has(target)) {
                 res.color = '#ef4444';
               } else {
                 res.color = '#06b6d4';

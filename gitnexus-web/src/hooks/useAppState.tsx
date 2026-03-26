@@ -13,6 +13,8 @@ import type { AgentMessage } from '../core/llm/agent';
 import { DEFAULT_VISIBLE_EDGES, type EdgeType } from '../lib/constants';
 import type { RepoSummary, ConnectToServerResult } from '../services/server-connection';
 import { fetchRepos, connectToServer } from '../services/server-connection';
+import type { DiffResult } from '../types/diff';
+import { fetchDiff } from '../services/backend';
 
 export type ViewMode = 'onboarding' | 'loading' | 'exploring';
 export type RightPanelTab = 'code' | 'chat';
@@ -170,6 +172,18 @@ interface AppState {
   clearAICodeReferences: () => void;
   clearCodeReferences: () => void;
   codeReferenceFocus: CodeReferenceFocus | null;
+
+  // Diff visualization
+  isDiffMode: boolean;
+  diffData: DiffResult | null;
+  diffLoading: boolean;
+  diffError: string | null;
+  selectedDiffFile: string | null;
+  diffChangedNodeIds: Set<string>;
+  diffAffectedProcessIds: Set<string>;
+  startDiff: (base: string, head?: string) => Promise<void>;
+  exitDiffMode: () => void;
+  setSelectedDiffFile: (filePath: string | null) => void;
 }
 
 const AppStateContext = createContext<AppState | null>(null);
@@ -304,6 +318,15 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [codeReferences, setCodeReferences] = useState<CodeReference[]>([]);
   const [isCodePanelOpen, setCodePanelOpen] = useState(false);
   const [codeReferenceFocus, setCodeReferenceFocus] = useState<CodeReferenceFocus | null>(null);
+
+  // Diff visualization state
+  const [isDiffMode, setIsDiffMode] = useState(false);
+  const [diffData, setDiffData] = useState<DiffResult | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
+  const [diffChangedNodeIds, setDiffChangedNodeIds] = useState<Set<string>>(new Set());
+  const [diffAffectedProcessIds, setDiffAffectedProcessIds] = useState<Set<string>>(new Set());
 
     const normalizePath = useCallback((p: string) => {
     return p.replace(/\\/g, '/').replace(/^\.?\//, '');
@@ -1000,6 +1023,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setCodeReferences([]);
     setCodePanelOpen(false);
     setCodeReferenceFocus(null);
+    // Clean up diff mode on repo switch
+    setIsDiffMode(false);
+    setDiffData(null);
+    setDiffError(null);
+    setSelectedDiffFile(null);
+    setDiffChangedNodeIds(new Set());
+    setDiffAffectedProcessIds(new Set());
 
     try {
       const result: ConnectToServerResult = await connectToServer(serverBaseUrl, (phase, downloaded, total) => {
@@ -1088,6 +1118,39 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setCodeReferences([]);
     setCodePanelOpen(false);
     setCodeReferenceFocus(null);
+  }, []);
+
+  // Diff visualization actions
+  const startDiff = useCallback(async (base: string, head?: string) => {
+    setDiffLoading(true);
+    setDiffError(null);
+    try {
+      const result = await fetchDiff(projectName, base, head);
+      if (result.error) {
+        setDiffError(result.error);
+        return;
+      }
+      setDiffData(result);
+      setIsDiffMode(true);
+      setDiffChangedNodeIds(new Set(result.changedSymbols.map(s => s.id)));
+      setDiffAffectedProcessIds(new Set(result.affectedProcesses.map(p => p.id)));
+      if (result.files.length > 0) {
+        setSelectedDiffFile(result.files[0].filePath);
+      }
+    } catch (err) {
+      setDiffError(err instanceof Error ? err.message : 'Diff failed');
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [projectName]);
+
+  const exitDiffMode = useCallback(() => {
+    setIsDiffMode(false);
+    setDiffData(null);
+    setDiffError(null);
+    setSelectedDiffFile(null);
+    setDiffChangedNodeIds(new Set());
+    setDiffAffectedProcessIds(new Set());
   }, []);
 
   const toggleLabelVisibility = useCallback((label: NodeLabel) => {
@@ -1198,6 +1261,17 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     clearAICodeReferences,
     clearCodeReferences,
     codeReferenceFocus,
+    // Diff visualization
+    isDiffMode,
+    diffData,
+    diffLoading,
+    diffError,
+    selectedDiffFile,
+    diffChangedNodeIds,
+    diffAffectedProcessIds,
+    startDiff,
+    exitDiffMode,
+    setSelectedDiffFile,
   };
 
   return (

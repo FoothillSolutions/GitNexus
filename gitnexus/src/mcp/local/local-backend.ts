@@ -1767,6 +1767,322 @@ export class LocalBackend {
     };
   }
 
+  // ─── Diff Visualization (for /api/diff, /api/branches) ─────────
+
+  /**
+   * Parse unified diff output into structured file/hunk data.
+   */
+  private parseDiffOutput(raw: string): Array<{
+    filePath: string;
+    status: 'added' | 'modified' | 'deleted' | 'renamed';
+    additions: number;
+    deletions: number;
+    hunks: Array<{
+      oldStart: number;
+      oldLines: number;
+      newStart: number;
+      newLines: number;
+      lines: string[];
+    }>;
+    symbols: Array<{ id: string; name: string; type: string; changeScope: string }>;
+  }> {
+    const files: Array<{
+      filePath: string;
+      status: 'added' | 'modified' | 'deleted' | 'renamed';
+      additions: number;
+      deletions: number;
+      hunks: Array<{
+        oldStart: number;
+        oldLines: number;
+        newStart: number;
+        newLines: number;
+        lines: string[];
+      }>;
+      symbols: Array<{ id: string; name: string; type: string; changeScope: string }>;
+    }> = [];
+
+    // Split by "diff --git" boundaries
+    const fileDiffs = raw.split(/^diff --git /m).filter(Boolean);
+
+    for (const fileDiff of fileDiffs) {
+      const lines = fileDiff.split('\n');
+
+      // Extract file path from the first line: "a/path b/path"
+      const headerMatch = lines[0]?.match(/a\/(.+?)\s+b\/(.+)/);
+      if (!headerMatch) continue;
+
+      const oldPath = headerMatch[1];
+      const newPath = headerMatch[2];
+      const filePath = newPath || oldPath;
+
+      // Determine status from --- / +++ lines
+      let status: 'added' | 'modified' | 'deleted' | 'renamed' = 'modified';
+      const minusLine = lines.find(l => l.startsWith('--- '));
+      const plusLine = lines.find(l => l.startsWith('+++ '));
+      if (minusLine?.includes('/dev/null')) {
+        status = 'added';
+      } else if (plusLine?.includes('/dev/null')) {
+        status = 'deleted';
+      } else if (oldPath !== newPath) {
+        status = 'renamed';
+      }
+
+      // Check for binary files
+      if (lines.some(l => l.startsWith('Binary files'))) continue;
+
+      // Parse hunks
+      const hunks: Array<{
+        oldStart: number;
+        oldLines: number;
+        newStart: number;
+        newLines: number;
+        lines: string[];
+      }> = [];
+      let additions = 0;
+      let deletions = 0;
+
+      let currentHunk: typeof hunks[0] | null = null;
+      for (const line of lines) {
+        const hunkMatch = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+        if (hunkMatch) {
+          if (currentHunk) hunks.push(currentHunk);
+          currentHunk = {
+            oldStart: parseInt(hunkMatch[1], 10),
+            oldLines: parseInt(hunkMatch[2] ?? '1', 10),
+            newStart: parseInt(hunkMatch[3], 10),
+            newLines: parseInt(hunkMatch[4] ?? '1', 10),
+            lines: [],
+          };
+          continue;
+        }
+        if (currentHunk && (line.startsWith('+') || line.startsWith('-') || line.startsWith(' '))) {
+          currentHunk.lines.push(line);
+          if (line.startsWith('+')) additions++;
+          else if (line.startsWith('-')) deletions++;
+        }
+      }
+      if (currentHunk) hunks.push(currentHunk);
+
+      files.push({ filePath, status, additions, deletions, hunks, symbols: [] });
+    }
+
+    return files;
+  }
+
+  /**
+   * Query structured diff between two refs with graph-annotated symbols.
+   * Returns hunks, changed symbols, affected processes, and risk assessment.
+   */
+  async queryDiff(params: {
+    base: string;
+    head?: string;
+    repo?: string;
+  }, repoName?: string): Promise<any> {
+    const repo = await this.resolveRepo(repoName || params.repo);
+    await this.ensureInitialized(repo.id);
+
+    const base = params.base;
+    const head = params.head || 'HEAD';
+    const { execFileSync } = await import('child_process');
+
+    // Get full unified diff
+    let diffOutput: string;
+    try {
+      diffOutput = execFileSync('git', ['diff', `${base}...${head}`], {
+        cwd: repo.repoPath,
+        encoding: 'utf-8',
+        maxBuffer: 10 * 1024 * 1024,
+      });
+    } catch (err: any) {
+      // Fallback to two-dot diff if three-dot fails (e.g., no merge-base)
+      try {
+        diffOutput = execFileSync('git', ['diff', base, head], {
+          cwd: repo.repoPath,
+          encoding: 'utf-8',
+          maxBuffer: 10 * 1024 * 1024,
+        });
+      } catch (err2: any) {
+        return { error: `Git diff failed: ${err2.message}` };
+      }
+    }
+
+    if (!diffOutput.trim()) {
+      return {
+        summary: {
+          base, head,
+          changedFiles: 0, additions: 0, deletions: 0,
+          changedSymbolCount: 0, affectedProcessCount: 0,
+          riskLevel: 'none',
+        },
+        commits: [],
+        files: [],
+        changedSymbols: [],
+        affectedProcesses: [],
+      };
+    }
+
+    // Parse diff into structured hunks
+    const parsedFiles = this.parseDiffOutput(diffOutput);
+    const totalAdditions = parsedFiles.reduce((s, f) => s + f.additions, 0);
+    const totalDeletions = parsedFiles.reduce((s, f) => s + f.deletions, 0);
+
+    // Get commits in range
+    let commits: Array<{ sha: string; message: string }> = [];
+    try {
+      const logOutput = execFileSync('git', ['log', '--oneline', `${base}..${head}`], {
+        cwd: repo.repoPath,
+        encoding: 'utf-8',
+      });
+      commits = logOutput.trim().split('\n').filter(Boolean).map(line => {
+        const spaceIdx = line.indexOf(' ');
+        return { sha: line.substring(0, spaceIdx), message: line.substring(spaceIdx + 1) };
+      });
+    } catch { /* non-fatal */ }
+
+    // Map changed files to symbols with line-range precision
+    const allChangedSymbols: Array<{
+      id: string; name: string; type: string; filePath: string;
+      changeScope: 'directly_changed' | 'in_changed_file';
+    }> = [];
+
+    for (const file of parsedFiles) {
+      const normalizedFile = file.filePath.replace(/\\/g, '/');
+      try {
+        const symbols = await executeParameterized(repo.id, `
+          MATCH (n) WHERE n.filePath CONTAINS $filePath
+          RETURN n.id AS id, n.name AS name, labels(n)[0] AS type, n.filePath AS filePath, n.startLine AS startLine, n.endLine AS endLine
+          LIMIT 50
+        `, { filePath: normalizedFile });
+
+        const fileSymbols: Array<{ id: string; name: string; type: string; changeScope: string }> = [];
+        for (const sym of symbols) {
+          const symId = sym.id || sym[0];
+          const symName = sym.name || sym[1];
+          const symType = sym.type || sym[2];
+          const symPath = sym.filePath || sym[3];
+          const startLine = sym.startLine || sym[4];
+          const endLine = sym.endLine || sym[5];
+
+          // Check if any hunk overlaps the symbol's line range
+          let directlyChanged = false;
+          if (startLine && endLine) {
+            for (const hunk of file.hunks) {
+              const hunkEnd = hunk.newStart + hunk.newLines - 1;
+              if (hunk.newStart <= endLine && hunkEnd >= startLine) {
+                directlyChanged = true;
+                break;
+              }
+            }
+          } else {
+            // No line info available, mark as in_changed_file
+            directlyChanged = false;
+          }
+
+          const changeScope = directlyChanged ? 'directly_changed' as const : 'in_changed_file' as const;
+          fileSymbols.push({ id: symId, name: symName, type: symType, changeScope });
+          allChangedSymbols.push({ id: symId, name: symName, type: symType, filePath: symPath, changeScope });
+        }
+
+        // Attach symbols to file
+        file.symbols = fileSymbols;
+      } catch (e) { logQueryError('queryDiff:file-symbols', e); }
+    }
+
+    // Find affected processes (reuse detectChanges pattern)
+    const affectedProcesses = new Map<string, any>();
+    for (const sym of allChangedSymbols) {
+      try {
+        const procs = await executeParameterized(repo.id, `
+          MATCH (n {id: $nodeId})-[r:CodeRelation {type: 'STEP_IN_PROCESS'}]->(p:Process)
+          RETURN p.id AS pid, p.heuristicLabel AS label, p.processType AS processType, p.stepCount AS stepCount, r.step AS step
+        `, { nodeId: sym.id });
+        for (const proc of procs) {
+          const pid = proc.pid || proc[0];
+          if (!affectedProcesses.has(pid)) {
+            affectedProcesses.set(pid, {
+              id: pid,
+              name: proc.label || proc[1],
+              processType: proc.processType || proc[2],
+              stepCount: proc.stepCount || proc[3],
+              changedSteps: [],
+            });
+          }
+          affectedProcesses.get(pid)!.changedSteps.push({
+            symbol: sym.name,
+            step: proc.step || proc[4],
+          });
+        }
+      } catch (e) { logQueryError('queryDiff:process-lookup', e); }
+    }
+
+    const processCount = affectedProcesses.size;
+    const riskLevel = processCount === 0 ? 'low' : processCount <= 5 ? 'medium' : processCount <= 15 ? 'high' : 'critical';
+
+    return {
+      summary: {
+        base, head,
+        changedFiles: parsedFiles.length,
+        additions: totalAdditions,
+        deletions: totalDeletions,
+        changedSymbolCount: allChangedSymbols.length,
+        affectedProcessCount: processCount,
+        riskLevel,
+      },
+      commits,
+      files: parsedFiles.map(f => ({
+        filePath: f.filePath,
+        status: f.status,
+        additions: f.additions,
+        deletions: f.deletions,
+        hunks: f.hunks,
+        symbols: f.symbols,
+      })),
+      changedSymbols: allChangedSymbols,
+      affectedProcesses: Array.from(affectedProcesses.values()),
+    };
+  }
+
+  /**
+   * List available branches and tags for a repository.
+   */
+  async queryBranches(repoName?: string): Promise<{
+    branches: string[];
+    tags: string[];
+    currentBranch: string;
+  }> {
+    const repo = await this.resolveRepo(repoName);
+    const { execFileSync } = await import('child_process');
+
+    let branches: string[] = [];
+    let tags: string[] = [];
+    let currentBranch = '';
+
+    try {
+      const branchOutput = execFileSync('git', ['for-each-ref', '--format=%(refname:short)', 'refs/heads'], {
+        cwd: repo.repoPath,
+        encoding: 'utf-8',
+      });
+      branches = branchOutput.trim().split('\n').filter(Boolean);
+    } catch { /* non-fatal */ }
+
+    try {
+      const tagOutput = execFileSync('git', ['for-each-ref', '--format=%(refname:short)', 'refs/tags'], {
+        cwd: repo.repoPath,
+        encoding: 'utf-8',
+      });
+      tags = tagOutput.trim().split('\n').filter(Boolean);
+    } catch { /* non-fatal */ }
+
+    try {
+      currentBranch = execFileSync('git', ['branch', '--show-current'], {
+        cwd: repo.repoPath,
+        encoding: 'utf-8',
+      }).trim();
+    } catch { /* non-fatal */ }
+
+    return { branches, tags, currentBranch };
+  }
+
   async disconnect(): Promise<void> {
     await closeLbug(); // close all connections
     // Note: we intentionally do NOT call disposeEmbedder() here.

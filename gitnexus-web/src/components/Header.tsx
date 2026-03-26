@@ -4,6 +4,7 @@ import type { RepoSummary } from '../services/server-connection';
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react';
 import { GraphNode } from '../core/graph/types';
 import { EmbeddingStatus } from './EmbeddingStatus';
+import { DiffSelector } from './DiffSelector';
 
 // Color mapping for node types in search results
 const NODE_TYPE_COLORS: Record<string, string> = {
@@ -236,6 +237,9 @@ export const Header = ({ onFocusNode, availableRepos = [], onSwitchRepo }: Heade
 
       {/* Right section */}
       <div className="flex items-center gap-2">
+        {/* Diff Selector */}
+        <DiffSelector />
+
         {/* GitHub Star Button */}
         <a
           href="https://github.com/abhigyanpatwari/GitNexus"

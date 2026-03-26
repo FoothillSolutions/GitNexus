@@ -9,6 +9,7 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { StatusBar } from './components/StatusBar';
 import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
+import { DiffPanel } from './components/DiffPanel';
 import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
@@ -41,6 +42,8 @@ const AppContent = () => {
     setAvailableRepos,
     switchRepo,
     hydrateWorkerFromServer,
+    isDiffMode,
+    diffData,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
@@ -290,11 +293,18 @@ const AppContent = () => {
         <div className="flex-1 relative min-w-0">
           <GraphCanvas ref={graphCanvasRef} />
 
-          {/* Code References Panel (overlay) - does NOT resize the graph, it overlaps on top */}
-          {isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
+          {/* Diff Panel (overlay) - replaces code panel when diff mode active */}
+          {isDiffMode && diffData ? (
             <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
-              <CodeReferencesPanel onFocusNode={handleFocusNode} />
+              <DiffPanel onFocusNode={handleFocusNode} />
             </div>
+          ) : (
+            /* Code References Panel (overlay) - does NOT resize the graph, it overlaps on top */
+            isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
+              <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
+                <CodeReferencesPanel onFocusNode={handleFocusNode} />
+              </div>
+            )
           )}
         </div>
 
