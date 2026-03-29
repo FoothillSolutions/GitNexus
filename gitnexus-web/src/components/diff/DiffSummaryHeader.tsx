@@ -6,7 +6,8 @@ const RISK_COLORS: Record<string, string> = {
 };
 
 export const DiffSummaryHeader = ({ summary, onClose }: { summary: DiffSummary; onClose: () => void }) => {
-  const risk = summary.riskLevel;
+  const risk = summary.riskLevel || 'none';
+  const riskColor = RISK_COLORS[risk] || RISK_COLORS.none;
   return (
     <div className="flex-shrink-0 px-4 py-3 border-b border-border-subtle bg-surface/60">
       <div className="flex items-center justify-between mb-2">
@@ -14,7 +15,7 @@ export const DiffSummaryHeader = ({ summary, onClose }: { summary: DiffSummary; 
           <span className="text-sm font-medium text-text-primary">Diff View</span>
           <span
             className="px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase"
-            style={{ backgroundColor: RISK_COLORS[risk] + '30', color: RISK_COLORS[risk] }}
+            style={{ backgroundColor: riskColor + '30', color: riskColor }}
           >
             {risk} risk
           </span>

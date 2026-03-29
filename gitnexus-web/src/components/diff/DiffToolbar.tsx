@@ -16,7 +16,7 @@ export const DiffToolbar = ({
   onJumpPrev, onJumpNext, fileExtensions,
 }: DiffToolbarProps) => {
   return (
-    <div className="flex-shrink-0 flex items-center gap-1 px-3 py-1.5 border-b border-border-subtle bg-surface/40 overflow-x-auto">
+    <div className="flex-shrink-0 flex items-center gap-1 px-3 py-1.5 border-b border-border-subtle bg-surface/40 overflow-x-auto scrollbar-thin">
       {/* View mode toggle */}
       <div className="flex items-center bg-elevated rounded-md border border-border-subtle">
         <button

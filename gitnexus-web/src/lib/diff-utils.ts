@@ -193,11 +193,11 @@ export function findCollapsibleRanges(pairedLines: PairedLine[], threshold: numb
     } else {
       if (runLength > threshold) {
         // Keep first 3 and last 3 lines visible
-        ranges.push({
-          startIdx: runStart + 3,
-          endIdx: runStart + runLength - 3,
-          lineCount: runLength - 6,
-        });
+        const start = runStart + 3;
+        const end = runStart + runLength - 3;
+        if (start < end) {
+          ranges.push({ startIdx: start, endIdx: end, lineCount: end - start });
+        }
       }
       runStart = -1;
       runLength = 0;

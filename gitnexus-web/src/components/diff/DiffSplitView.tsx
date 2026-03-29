@@ -17,8 +17,14 @@ export const DiffSplitView = ({ hunks, language, hideFormatting, searchTerm }: D
   const handleLeftScroll = useCallback(() => {
     if (isSyncingRef.current) return;
     isSyncingRef.current = true;
-    if (leftRef.current && rightRef.current) {
-      rightRef.current.scrollTop = leftRef.current.scrollTop;
+    const left = leftRef.current;
+    const right = rightRef.current;
+    if (left && right) {
+      const maxLeft = left.scrollHeight - left.clientHeight;
+      const maxRight = right.scrollHeight - right.clientHeight;
+      if (maxLeft > 0 && maxRight > 0) {
+        right.scrollTop = (left.scrollTop / maxLeft) * maxRight;
+      }
     }
     requestAnimationFrame(() => { isSyncingRef.current = false; });
   }, []);
@@ -26,8 +32,14 @@ export const DiffSplitView = ({ hunks, language, hideFormatting, searchTerm }: D
   const handleRightScroll = useCallback(() => {
     if (isSyncingRef.current) return;
     isSyncingRef.current = true;
-    if (leftRef.current && rightRef.current) {
-      leftRef.current.scrollTop = rightRef.current.scrollTop;
+    const left = leftRef.current;
+    const right = rightRef.current;
+    if (left && right) {
+      const maxRight = right.scrollHeight - right.clientHeight;
+      const maxLeft = left.scrollHeight - left.clientHeight;
+      if (maxRight > 0 && maxLeft > 0) {
+        left.scrollTop = (right.scrollTop / maxRight) * maxLeft;
+      }
     }
     requestAnimationFrame(() => { isSyncingRef.current = false; });
   }, []);

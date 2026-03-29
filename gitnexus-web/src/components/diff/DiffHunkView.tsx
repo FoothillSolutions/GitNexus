@@ -121,13 +121,33 @@ export const DiffHunkView = ({
               return null; // Hidden line
             }
 
+            // Show "collapse" button at start of an expanded range
+            const expandedRangeIdx = collapsibleRanges.findIndex(r => r.startIdx === idx && expandedRanges.has(collapsibleRanges.indexOf(r)));
+            const showCollapseButton = expandedRangeIdx >= 0;
+
             // Search filter
-            const lineContent = pl.oldLine || pl.newLine || '';
             if (searchTerm && !matchesSearch(pl.oldLine) && !matchesSearch(pl.newLine)) {
               return null;
             }
 
-            return <PairedLineRow key={idx} line={pl} searchTerm={searchTerm} />;
+            return (
+              <>
+                {showCollapseButton && (
+                  <tr key={`recollapse-${idx}`}>
+                    <td colSpan={4}>
+                      <button
+                        onClick={() => toggleRange(expandedRangeIdx)}
+                        className="w-full py-0.5 px-4 text-[9px] text-text-muted/60 hover:bg-hover transition-colors flex items-center justify-center gap-1"
+                      >
+                        <ChevronDown className="w-2.5 h-2.5 rotate-180" />
+                        collapse
+                      </button>
+                    </td>
+                  </tr>
+                )}
+                <PairedLineRow key={idx} line={pl} searchTerm={searchTerm} />
+              </>
+            );
           })}
         </tbody>
       </table>
@@ -243,13 +263,15 @@ const HighlightedContent = ({ content, searchTerm }: { content: string; searchTe
     return <>{content || '\u00A0'}</>;
   }
 
-  const regex = new RegExp(`(${searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')})`, 'gi');
+  const escaped = searchTerm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(${escaped})`, 'gi');
   const parts = content.split(regex);
 
+  // split() with a capturing group puts matches at odd indices
   return (
     <>
       {parts.map((part, i) =>
-        regex.test(part) ? (
+        i % 2 === 1 ? (
           <mark key={i} className="bg-yellow-500/30 rounded-sm px-0.5">{part}</mark>
         ) : (
           <span key={i}>{part}</span>

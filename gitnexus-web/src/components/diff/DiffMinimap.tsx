@@ -1,4 +1,4 @@
-import { useRef, useEffect, useCallback } from 'react';
+import { useRef, useEffect, useCallback, useState } from 'react';
 import type { DiffFile } from '../../types/diff';
 
 interface DiffMinimapProps {
@@ -11,18 +11,39 @@ interface DiffMinimapProps {
 
 export const DiffMinimap = ({ file, scrollTop, scrollHeight, clientHeight, onSeek }: DiffMinimapProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [canvasHeight, setCanvasHeight] = useState(300);
+
+  // Track container height with ResizeObserver
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container) return;
+
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = Math.round(entry.contentRect.height);
+        if (h > 0) setCanvasHeight(h);
+      }
+    });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, []);
 
   // Calculate total lines
-  const totalLines = file.hunks.reduce((acc, h) => acc + h.lines.length + 1, 0); // +1 for hunk header
+  const totalLines = file.hunks.reduce((acc, h) => acc + h.lines.length + 1, 0);
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || totalLines === 0) return;
+    if (!canvas || totalLines === 0 || canvasHeight === 0) return;
 
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const { width, height } = canvas;
+    const width = 16;
+    const height = canvasHeight;
+    canvas.width = width;
+    canvas.height = height;
+
     ctx.clearRect(0, 0, width, height);
 
     // Draw background
@@ -32,7 +53,6 @@ export const DiffMinimap = ({ file, scrollTop, scrollHeight, clientHeight, onSee
     // Draw hunks
     let lineOffset = 0;
     for (const hunk of file.hunks) {
-      // Hunk header
       const headerY = (lineOffset / totalLines) * height;
       ctx.fillStyle = 'rgba(136, 136, 160, 0.2)';
       ctx.fillRect(0, headerY, width, Math.max(1, height / totalLines));
@@ -65,7 +85,7 @@ export const DiffMinimap = ({ file, scrollTop, scrollHeight, clientHeight, onSee
       ctx.lineWidth = 1;
       ctx.strokeRect(0.5, viewportTop + 0.5, width - 1, viewportHeight);
     }
-  }, [file, totalLines, scrollTop, scrollHeight, clientHeight]);
+  }, [file, totalLines, scrollTop, scrollHeight, clientHeight, canvasHeight]);
 
   const handleClick = useCallback((e: React.MouseEvent<HTMLCanvasElement>) => {
     const canvas = canvasRef.current;
@@ -76,13 +96,15 @@ export const DiffMinimap = ({ file, scrollTop, scrollHeight, clientHeight, onSee
   }, [onSeek]);
 
   return (
-    <canvas
-      ref={canvasRef}
-      width={16}
-      height={400}
-      onClick={handleClick}
-      className="w-4 h-full cursor-pointer flex-shrink-0 border-l border-border-subtle/30"
-      style={{ imageRendering: 'pixelated' }}
-    />
+    <div ref={containerRef} className="w-4 h-full flex-shrink-0 border-l border-border-subtle/30">
+      <canvas
+        ref={canvasRef}
+        width={16}
+        height={canvasHeight}
+        onClick={handleClick}
+        className="w-full h-full cursor-pointer"
+        style={{ imageRendering: 'pixelated' }}
+      />
+    </div>
   );
 };

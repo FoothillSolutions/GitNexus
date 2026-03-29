@@ -31,8 +31,17 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
     return saved ? Math.max(500, Math.min(1200, parseInt(saved))) : 720;
   });
   const [activeCommit, setActiveCommit] = useState<string | null>(null);
+  // Preserve original base/head refs for "Show All" after timeline navigation
+  const originalRefsRef = useRef<{ base: string; head: string } | null>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
   const panelRef = useRef<HTMLDivElement>(null);
+
+  // Capture original refs when diff data first loads (not from timeline nav)
+  useEffect(() => {
+    if (diffData?.summary && !activeCommit) {
+      originalRefsRef.current = { base: diffData.summary.base, head: diffData.summary.head };
+    }
+  }, [diffData, activeCommit]);
 
   // Resize handler
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -155,11 +164,11 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
 
   const handleShowAll = useCallback(() => {
     setActiveCommit(null);
-    // Re-fetch with original base/head (stored in summary)
-    if (diffData?.summary) {
-      startDiff(diffData.summary.base, diffData.summary.head);
+    const orig = originalRefsRef.current;
+    if (orig) {
+      startDiff(orig.base, orig.head);
     }
-  }, [diffData, startDiff]);
+  }, [startDiff]);
 
   // Loading state
   if (diffLoading) {
