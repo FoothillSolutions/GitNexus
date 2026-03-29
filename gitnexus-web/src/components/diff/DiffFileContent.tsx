@@ -1,5 +1,6 @@
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { Target, Copy, Check, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react';
+import { useAppState } from '../../hooks/useAppState';
 import type { DiffFile } from '../../types/diff';
 import type { DiffPreferences } from '../../hooks/useDiffPreferences';
 import { getSyntaxLanguage } from '../../lib/syntax-utils';
@@ -15,10 +16,28 @@ interface DiffFileContentProps {
 }
 
 export const DiffFileContent = ({ file, prefs, onFocusNode }: DiffFileContentProps) => {
+  const { diffFocusedSymbolId, setDiffFocusedSymbolId } = useAppState();
   const language = getSyntaxLanguage(file.filePath);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [scrollState, setScrollState] = useState({ top: 0, height: 0, client: 0 });
   const [copiedPath, setCopiedPath] = useState(false);
+
+  // Scroll to focused symbol when graph node is clicked
+  useEffect(() => {
+    if (!diffFocusedSymbolId || !scrollRef.current) return;
+    const sym = file.symbols.find(s => s.id === diffFocusedSymbolId);
+    if (!sym) return;
+    const hunkElements = scrollRef.current.querySelectorAll('[data-hunk-index]');
+    for (const el of Array.from(hunkElements)) {
+      if (el.textContent?.includes(sym.name)) {
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        (el as HTMLElement).style.outline = '2px solid rgba(251, 191, 36, 0.5)';
+        setTimeout(() => { (el as HTMLElement).style.outline = ''; }, 2000);
+        break;
+      }
+    }
+    setDiffFocusedSymbolId(null);
+  }, [diffFocusedSymbolId, file, setDiffFocusedSymbolId]);
 
   // Track scroll for minimap
   const handleScroll = useCallback(() => {

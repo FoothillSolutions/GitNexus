@@ -282,6 +282,115 @@ export interface DiffInsight {
   fileSummaries: Array<{ filePath: string; summary: string }>;
 }
 
+// ── Risk Categorization ──────────────────────────────────────────────────
+
+export type RiskCategory = 'core-logic' | 'wide-impact' | 'refactor' | 'breaking' | 'config' | 'ui-only';
+
+export interface RiskChip {
+  category: RiskCategory;
+  label: string;
+  color: string;
+  bgColor: string;
+  matchingFiles: string[];
+}
+
+const CONFIG_EXTS = new Set(['json', 'yaml', 'yml', 'toml', 'env', 'ini', 'cfg']);
+const UI_EXTS = new Set(['tsx', 'jsx', 'css', 'scss', 'sass', 'less', 'html', 'svg']);
+const DOC_EXTS = new Set(['md', 'mdx', 'txt', 'rst']);
+
+export function categorizeRisks(data: DiffResult): RiskChip[] {
+  const chips: RiskChip[] = [];
+  const { changedSymbols, affectedProcesses, files } = data;
+
+  // Core logic: directly changed symbols in processes
+  const coreFiles = files.filter(f =>
+    f.symbols.some(s => s.changeScope === 'directly_changed') &&
+    !CONFIG_EXTS.has(f.filePath.split('.').pop()?.toLowerCase() || '') &&
+    !UI_EXTS.has(f.filePath.split('.').pop()?.toLowerCase() || '')
+  );
+  if (coreFiles.length > 0) {
+    chips.push({ category: 'core-logic', label: 'Core Logic', color: '#ef4444', bgColor: 'rgba(239,68,68,0.15)', matchingFiles: coreFiles.map(f => f.filePath) });
+  }
+
+  // Wide impact
+  if (affectedProcesses.length > 5) {
+    chips.push({ category: 'wide-impact', label: `Wide Impact (${affectedProcesses.length} flows)`, color: '#f97316', bgColor: 'rgba(249,115,22,0.15)', matchingFiles: [] });
+  }
+
+  // Refactor: many in_changed_file symbols
+  const inFileOnly = changedSymbols.filter(s => s.changeScope === 'in_changed_file');
+  if (inFileOnly.length > changedSymbols.length * 0.5 && changedSymbols.length > 5) {
+    chips.push({ category: 'refactor', label: 'Refactor', color: '#a78bfa', bgColor: 'rgba(167,139,250,0.15)', matchingFiles: [] });
+  }
+
+  // Breaking: Class/Interface changes
+  const breakingSyms = changedSymbols.filter(s =>
+    s.changeScope === 'directly_changed' && ['Class', 'Interface', 'Struct', 'Trait'].includes(s.type || '')
+  );
+  if (breakingSyms.length > 0) {
+    chips.push({ category: 'breaking', label: 'Breaking', color: '#ef4444', bgColor: 'rgba(239,68,68,0.15)', matchingFiles: breakingSyms.map(s => s.filePath) });
+  }
+
+  // Config only
+  const configFiles = files.filter(f => CONFIG_EXTS.has(f.filePath.split('.').pop()?.toLowerCase() || ''));
+  if (configFiles.length > 0) {
+    chips.push({ category: 'config', label: 'Config', color: '#6b7280', bgColor: 'rgba(107,114,128,0.15)', matchingFiles: configFiles.map(f => f.filePath) });
+  }
+
+  // UI only
+  const uiFiles = files.filter(f => UI_EXTS.has(f.filePath.split('.').pop()?.toLowerCase() || ''));
+  if (uiFiles.length > 0 && uiFiles.length === files.length) {
+    chips.push({ category: 'ui-only', label: 'UI Only', color: '#ec4899', bgColor: 'rgba(236,72,153,0.15)', matchingFiles: uiFiles.map(f => f.filePath) });
+  }
+
+  return chips;
+}
+
+// ── File & Hunk Intent ───────────────────────────────────────────────────
+
+export function generateFileIntent(file: DiffFile): string {
+  if (file.status === 'added') return 'New file';
+  if (file.status === 'deleted') return 'Removed';
+  if (file.status === 'renamed') return 'Renamed/moved';
+
+  const directs = file.symbols.filter(s => s.changeScope === 'directly_changed');
+  if (directs.length === 0) return `${file.additions} additions, ${file.deletions} deletions`;
+
+  const types = new Set(directs.map(s => s.type?.toLowerCase()).filter(Boolean));
+  const names = directs.slice(0, 2).map(s => s.name);
+
+  if (types.has('class') || types.has('interface')) {
+    return `Modifies ${names.join(', ')}${directs.length > 2 ? ` +${directs.length - 2}` : ''}`;
+  }
+  if (types.has('function') || types.has('method')) {
+    return `Updates ${names.join(', ')}${directs.length > 2 ? ` +${directs.length - 2}` : ''}`;
+  }
+  return `Changes ${directs.length} symbol${directs.length > 1 ? 's' : ''}`;
+}
+
+export function classifyHunkIntent(hunk: DiffHunk): string | null {
+  const added = hunk.lines.filter(l => l[0] === '+').map(l => l.substring(1));
+  const removed = hunk.lines.filter(l => l[0] === '-').map(l => l.substring(1));
+
+  // Import change
+  if (added.some(l => /^\s*(import|from|require)/.test(l)) || removed.some(l => /^\s*(import|from|require)/.test(l))) {
+    return 'Import change';
+  }
+  // Class/interface definition
+  if (added.some(l => /^\s*(class|interface|struct|trait|enum)\s/.test(l)) || removed.some(l => /^\s*(class|interface|struct|trait|enum)\s/.test(l))) {
+    return 'Type definition change';
+  }
+  // Function signature
+  if (added.some(l => /^\s*(function|def|fn|func|async|export)\s/.test(l)) || removed.some(l => /^\s*(function|def|fn|func|async|export)\s/.test(l))) {
+    return 'Function signature change';
+  }
+  // Return statement
+  if (added.some(l => /^\s*return\s/.test(l)) || removed.some(l => /^\s*return\s/.test(l))) {
+    return 'Return value change';
+  }
+  return null;
+}
+
 export function generateDiffInsight(data: DiffResult): DiffInsight {
   const { summary, changedSymbols, affectedProcesses, files } = data;
 

@@ -8,12 +8,15 @@ import { DiffTimelineBar } from './DiffTimelineBar';
 import { DiffToolbar } from './DiffToolbar';
 import { DiffFileList } from './DiffFileList';
 import { DiffFileContent } from './DiffFileContent';
+import { GuidedReview } from './GuidedReview';
+import { categorizeRisks } from '../../lib/diff-utils';
 
 interface DiffPanelProps {
   onFocusNode: (nodeId: string) => void;
+  fullWidth?: boolean;
 }
 
-export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
+export const DiffPanel = ({ onFocusNode, fullWidth }: DiffPanelProps) => {
   const {
     diffData,
     diffLoading,
@@ -22,6 +25,10 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
     setSelectedDiffFile,
     exitDiffMode,
     startDiff,
+    reviewFlowActive,
+    setReviewFlowActive,
+    diffFileGrouping,
+    diffRiskChipFilter,
   } = useAppState();
 
   const { prefs, setPreference, togglePreference } = useDiffPreferences();
@@ -65,7 +72,7 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
     localStorage.setItem('gitnexus-diff-panel-width', String(panelWidth));
   }, [panelWidth]);
 
-  // Filtered files based on preferences
+  // Filtered files based on preferences and risk chip
   const filteredFiles = useMemo(() => {
     if (!diffData) return [];
     let files = diffData.files;
@@ -75,8 +82,17 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
         return prefs.fileTypeFilters.includes(ext);
       });
     }
+    // Risk chip filtering
+    if (diffRiskChipFilter) {
+      const chips = categorizeRisks(diffData);
+      const chip = chips.find(c => c.category === diffRiskChipFilter);
+      if (chip && chip.matchingFiles.length > 0) {
+        const matchSet = new Set(chip.matchingFiles);
+        files = files.filter(f => matchSet.has(f.filePath));
+      }
+    }
     return files;
-  }, [diffData, prefs.fileTypeFilters]);
+  }, [diffData, prefs.fileTypeFilters, diffRiskChipFilter]);
 
   // File extensions for filter chips
   const fileExtensions = useMemo(() => {
@@ -173,7 +189,7 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
   // Loading state
   if (diffLoading) {
     return (
-      <div className="h-full flex flex-col bg-deep border-r border-border-subtle" style={{ width: panelWidth }}>
+      <div className="h-full flex flex-col bg-deep border-r border-border-subtle" style={{ width: fullWidth ? '100%' : panelWidth }}>
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3 text-text-muted">
             <Loader2 className="w-8 h-8 animate-spin text-amber-400" />
@@ -187,7 +203,7 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
   // Error state
   if (diffError) {
     return (
-      <div className="h-full flex flex-col bg-deep border-r border-border-subtle" style={{ width: panelWidth }}>
+      <div className="h-full flex flex-col bg-deep border-r border-border-subtle" style={{ width: fullWidth ? '100%' : panelWidth }}>
         <div className="flex-1 flex items-center justify-center">
           <div className="flex flex-col items-center gap-3 text-red-400 px-6 text-center">
             <AlertTriangle className="w-8 h-8" />
@@ -207,11 +223,11 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
     <div
       ref={panelRef}
       className="h-full flex flex-col bg-deep border-r border-border-subtle relative"
-      style={{ width: panelWidth }}
+      style={{ width: fullWidth ? '100%' : panelWidth }}
       tabIndex={0}
     >
       {/* Summary header */}
-      <DiffSummaryHeader summary={diffData.summary} onClose={exitDiffMode} />
+      <DiffSummaryHeader data={diffData} onClose={exitDiffMode} />
 
       {/* AI Summary (collapsible) */}
       {prefs.showAISummary && <DiffAISummary data={diffData} />}
@@ -244,6 +260,7 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
           selectedFile={selectedDiffFile}
           onSelectFile={setSelectedDiffFile}
           loading={diffLoading}
+          groupBy={diffFileGrouping}
         />
 
         {/* Diff content */}
@@ -251,18 +268,31 @@ export const DiffPanel = ({ onFocusNode }: DiffPanelProps) => {
           {selectedFile ? (
             <DiffFileContent file={selectedFile} prefs={prefs} onFocusNode={onFocusNode} />
           ) : (
-            <div className="flex-1 flex items-center justify-center h-full text-text-muted text-sm">
-              Select a file to view diff
+            <div className="flex-1 flex flex-col items-center justify-center h-full gap-4">
+              <span className="text-text-muted text-sm">Select a file to view diff</span>
+              {!reviewFlowActive && (
+                <button
+                  onClick={() => setReviewFlowActive(true)}
+                  className="flex items-center gap-2 px-4 py-2 bg-amber-500/20 border border-amber-500/30 rounded-lg text-sm font-medium text-amber-300 hover:bg-amber-500/30 transition-colors"
+                >
+                  Start Guided Review
+                </button>
+              )}
             </div>
           )}
         </div>
       </div>
 
-      {/* Resize handle */}
-      <div
-        onMouseDown={handleResizeStart}
-        className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-accent/40 transition-colors z-10"
-      />
+      {/* Guided Review bar */}
+      <GuidedReview />
+
+      {/* Resize handle (hidden in fullWidth) */}
+      {!fullWidth && (
+        <div
+          onMouseDown={handleResizeStart}
+          className="absolute top-0 right-0 w-1 h-full cursor-col-resize hover:bg-accent/40 transition-colors z-10"
+        />
+      )}
     </div>
   );
 };

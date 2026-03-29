@@ -3,7 +3,7 @@ import { Copy, Check, AlertTriangle, ChevronDown } from 'lucide-react';
 import type { DiffHunk, DiffSymbol } from '../../types/diff';
 import {
   pairHunkLines, computeWordDiff, findCollapsibleRanges,
-  CHANGE_CATEGORY_COLORS,
+  classifyHunkIntent, CHANGE_CATEGORY_COLORS,
   type PairedLine, type DiffSegment,
 } from '../../lib/diff-utils';
 
@@ -24,6 +24,7 @@ export const DiffHunkView = ({
 }: DiffHunkViewProps) => {
   const [copied, setCopied] = useState(false);
   const [expandedRanges, setExpandedRanges] = useState<Set<number>>(new Set());
+  const hunkIntent = useMemo(() => classifyHunkIntent(hunk), [hunk]);
 
   // Pair lines for word-level diffing
   const pairedLines = useMemo(() => {
@@ -84,6 +85,11 @@ export const DiffHunkView = ({
             <AlertTriangle className="w-3 h-3 text-amber-400" />
           )}
           <span>@@ -{hunk.oldStart},{hunk.oldLines} +{hunk.newStart},{hunk.newLines} @@</span>
+          {hunkIntent && (
+            <span className="px-1.5 py-0.5 rounded bg-purple-500/15 text-purple-300 text-[9px] font-medium">
+              {hunkIntent}
+            </span>
+          )}
         </div>
         <button
           onClick={handleCopyHunk}
@@ -166,7 +172,7 @@ const PairedLineRow = ({ line, searchTerm }: { line: PairedLine; searchTerm: str
 
   if (line.type === 'context') {
     return (
-      <tr>
+      <tr className="opacity-60">
         <td className="w-10 px-2 text-right select-none text-text-muted/40 border-r border-border-subtle/30">{line.oldNum ?? ''}</td>
         <td className="w-10 px-2 text-right select-none text-text-muted/40 border-r border-border-subtle/30">{line.newNum ?? ''}</td>
         <td className="w-6 px-1 text-center select-none text-text-muted/40" />
@@ -250,8 +256,8 @@ const WordDiffLine = ({ segments, type, searchTerm }: { segments: DiffSegment[];
         return <HighlightedContent key={i} content={seg.text} searchTerm={searchTerm} />;
       }
       const markClass = type === 'added'
-        ? 'bg-green-500/30 rounded-sm px-0.5'
-        : 'bg-red-500/30 rounded-sm px-0.5';
+        ? 'bg-green-500/30 rounded-sm px-0.5 [text-shadow:0_0_6px_rgba(34,197,94,0.4)]'
+        : 'bg-red-500/30 rounded-sm px-0.5 [text-shadow:0_0_6px_rgba(239,68,68,0.4)]';
       return <mark key={i} className={markClass}>{seg.text}</mark>;
     })}
   </span>

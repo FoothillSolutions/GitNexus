@@ -1,5 +1,8 @@
-import { FileCode, FilePlus2, FileMinus2, FileEdit, AlertTriangle, RefreshCw } from 'lucide-react';
+import { useMemo } from 'react';
+import { FileCode, FilePlus2, FileMinus2, FileEdit, AlertTriangle, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
+import { useState, useCallback } from 'react';
 import type { DiffFile } from '../../types/diff';
+import { generateFileIntent } from '../../lib/diff-utils';
 
 const STATUS_ICONS: Record<string, typeof FileEdit> = {
   added: FilePlus2, modified: FileEdit, deleted: FileMinus2, renamed: FileCode,
@@ -14,9 +17,10 @@ interface DiffFileListProps {
   selectedFile: string | null;
   onSelectFile: (path: string) => void;
   loading?: boolean;
+  groupBy?: 'flat' | 'module' | 'changeType' | 'risk';
 }
 
-export const DiffFileList = ({ files, selectedFile, onSelectFile, loading }: DiffFileListProps) => {
+export const DiffFileList = ({ files, selectedFile, onSelectFile, loading, groupBy = 'flat' }: DiffFileListProps) => {
   if (loading) {
     return (
       <div className="w-52 flex-shrink-0 border-r border-border-subtle p-3 space-y-3">
@@ -45,42 +49,65 @@ export const DiffFileList = ({ files, selectedFile, onSelectFile, loading }: Dif
         const hasBreaking = file.symbols.some(s => s.changeScope === 'directly_changed');
         const isRename = file.status === 'renamed';
 
-        // Border color based on symbol risk
+        // Border and background based on status
         const borderColor = isSelected
           ? (hasBreaking ? 'border-amber-500' : 'border-blue-500')
           : 'border-transparent';
+
+        const statusBg = isSelected
+          ? 'bg-amber-500/15'
+          : file.status === 'added' ? 'bg-green-900/5'
+          : file.status === 'deleted' ? 'bg-red-900/5'
+          : '';
+
+        // Heat bar
+        const addRatio = file.additions / Math.max(1, file.additions + file.deletions);
+        const intent = generateFileIntent(file);
 
         return (
           <button
             key={file.filePath}
             onClick={() => onSelectFile(file.filePath)}
-            className={`w-full px-3 py-2 flex items-start gap-2 text-left transition-colors border-l-2 ${borderColor} ${
+            className={`w-full flex items-stretch text-left transition-colors ${
               isSelected
-                ? 'bg-amber-500/10 text-text-primary'
-                : 'hover:bg-hover text-text-secondary'
+                ? `${statusBg} text-text-primary`
+                : `${statusBg} hover:bg-hover text-text-secondary`
             }`}
           >
-            <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" style={{ color }} />
-            <div className="min-w-0 flex-1">
-              <div className="text-xs font-medium truncate flex items-center gap-1">
-                {fileName}
-                {/* Badges */}
-                {isLarge && (
-                  <span className="px-1 py-0 rounded text-[8px] bg-amber-500/20 text-amber-400 font-semibold">LG</span>
+            {/* Heat bar */}
+            <div
+              className={`w-1 flex-shrink-0 ${isSelected ? '' : 'opacity-60'}`}
+              style={{
+                background: `linear-gradient(to bottom, #22c55e ${addRatio * 100}%, #ef4444 ${addRatio * 100}%)`,
+              }}
+            />
+            {/* Border indicator */}
+            <div className={`w-0.5 flex-shrink-0 ${isSelected ? borderColor.replace('border-', 'bg-') : ''}`} />
+
+            <div className="flex items-start gap-2 px-2 py-2 min-w-0 flex-1">
+              <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" style={{ color }} />
+              <div className="min-w-0 flex-1">
+                <div className={`text-xs font-medium truncate flex items-center gap-1 ${file.status === 'deleted' ? 'line-through opacity-60' : ''}`}>
+                  {fileName}
+                  {isLarge && (
+                    <span className="px-1 py-0 rounded text-[8px] bg-amber-500/20 text-amber-400 font-semibold">LG</span>
+                  )}
+                  {hasBreaking && (
+                    <AlertTriangle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
+                  )}
+                  {isRename && (
+                    <RefreshCw className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
+                  )}
+                </div>
+                {dirPath && (
+                  <div className="text-[10px] text-text-muted truncate">{dirPath}</div>
                 )}
-                {hasBreaking && (
-                  <AlertTriangle className="w-2.5 h-2.5 text-red-400 flex-shrink-0" />
-                )}
-                {isRename && (
-                  <RefreshCw className="w-2.5 h-2.5 text-blue-400 flex-shrink-0" />
-                )}
-              </div>
-              {dirPath && (
-                <div className="text-[10px] text-text-muted truncate">{dirPath}</div>
-              )}
-              <div className="flex items-center gap-2 mt-0.5">
-                <span className="text-[10px] text-green-400">+{file.additions}</span>
-                <span className="text-[10px] text-red-400">-{file.deletions}</span>
+                {/* Intent label */}
+                <div className="text-[9px] text-text-muted/70 truncate italic">{intent}</div>
+                <div className="flex items-center gap-2 mt-0.5">
+                  <span className="text-[10px] text-green-400">+{file.additions}</span>
+                  <span className="text-[10px] text-red-400">-{file.deletions}</span>
+                </div>
               </div>
             </div>
           </button>

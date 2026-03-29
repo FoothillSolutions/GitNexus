@@ -29,6 +29,14 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     animatedNodes,
     isDiffMode,
     diffChangedNodeIds,
+    diffData,
+    setSelectedDiffFile,
+    diffFocusedSymbolId,
+    setDiffFocusedSymbolId,
+    diffGraphFilter,
+    diffGraphDepth,
+    setDiffGraphFilter,
+    setDiffGraphDepth,
   } = useAppState();
   const [hoveredNodeName, setHoveredNodeName] = useState<string | null>(null);
 
@@ -62,11 +70,23 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
   const handleNodeClick = useCallback((nodeId: string) => {
     if (!graph) return;
     const node = graph.nodes.find(n => n.id === nodeId);
-    if (node) {
-      setSelectedNode(node);
-      openCodePanel();
+    if (!node) return;
+
+    // Graph → Diff: if in diff mode and node is a changed symbol, navigate to its file
+    if (isDiffMode && diffChangedNodeIds.has(nodeId) && diffData) {
+      const targetFile = diffData.files.find(f =>
+        f.symbols.some(s => s.id === nodeId)
+      );
+      if (targetFile) {
+        setSelectedDiffFile(targetFile.filePath);
+        setDiffFocusedSymbolId(nodeId);
+        return;
+      }
     }
-  }, [graph, setSelectedNode, openCodePanel]);
+
+    setSelectedNode(node);
+    openCodePanel();
+  }, [graph, setSelectedNode, openCodePanel, isDiffMode, diffChangedNodeIds, diffData, setSelectedDiffFile, setDiffFocusedSymbolId]);
 
   const handleNodeHover = useCallback((nodeId: string | null) => {
     if (!nodeId || !graph) {
@@ -105,6 +125,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     animatedNodes: effectiveAnimatedNodes,
     visibleEdgeTypes,
     diffNodeIds: effectiveDiffNodeIds,
+    diffFocusedNodeId: diffFocusedSymbolId,
   });
 
   // Expose focusNode to parent via ref
@@ -330,6 +351,38 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
           {isAIHighlightsEnabled ? <Lightbulb className="w-4 h-4" /> : <LightbulbOff className="w-4 h-4" />}
         </button>
       </div>
+
+      {/* Diff Mode Graph Controls */}
+      {isDiffMode && (
+        <div className="absolute top-16 right-4 z-20 flex flex-col gap-1.5 animate-fade-in">
+          {/* Only Impacted toggle */}
+          <button
+            onClick={() => setDiffGraphFilter(diffGraphFilter === 'all' ? 'impacted' : 'all')}
+            className={`px-2.5 py-1.5 rounded-lg text-[10px] font-medium border transition-colors ${
+              diffGraphFilter === 'impacted'
+                ? 'bg-amber-500/20 border-amber-500/30 text-amber-300'
+                : 'bg-elevated border-border-subtle text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            {diffGraphFilter === 'impacted' ? 'Show All Nodes' : 'Only Impacted'}
+          </button>
+
+          {/* Depth slider */}
+          {diffGraphFilter === 'impacted' && (
+            <div className="px-2.5 py-1.5 bg-elevated border border-border-subtle rounded-lg">
+              <div className="text-[9px] text-text-muted mb-1">Depth: {diffGraphDepth} hop{diffGraphDepth > 1 ? 's' : ''}</div>
+              <input
+                type="range"
+                min={1}
+                max={3}
+                value={diffGraphDepth}
+                onChange={e => setDiffGraphDepth(Number(e.target.value))}
+                className="w-full h-1 accent-amber-500"
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 });

@@ -58,6 +58,7 @@ interface UseSigmaOptions {
   animatedNodes?: Map<string, NodeAnimation>;
   visibleEdgeTypes?: EdgeType[];
   diffNodeIds?: Set<string>;
+  diffFocusedNodeId?: string | null;
 }
 
 interface UseSigmaReturn {
@@ -133,6 +134,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   const highlightedRef = useRef<Set<string>>(new Set());
   const blastRadiusRef = useRef<Set<string>>(new Set());
   const diffNodesRef = useRef<Set<string>>(new Set());
+  const diffFocusedRef = useRef<string | null>(null);
   const animatedNodesRef = useRef<Map<string, NodeAnimation>>(new Map());
   const visibleEdgeTypesRef = useRef<EdgeType[] | null>(null);
   const layoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -144,10 +146,11 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     highlightedRef.current = options.highlightedNodeIds || new Set();
     blastRadiusRef.current = options.blastRadiusNodeIds || new Set();
     diffNodesRef.current = options.diffNodeIds || new Set();
+    diffFocusedRef.current = options.diffFocusedNodeId || null;
     animatedNodesRef.current = options.animatedNodes || new Map();
     visibleEdgeTypesRef.current = options.visibleEdgeTypes || null;
     sigmaRef.current?.refresh();
-  }, [options.highlightedNodeIds, options.blastRadiusNodeIds, options.diffNodeIds, options.animatedNodes, options.visibleEdgeTypes]);
+  }, [options.highlightedNodeIds, options.blastRadiusNodeIds, options.diffNodeIds, options.diffFocusedNodeId, options.animatedNodes, options.visibleEdgeTypes]);
 
   // Animation loop for node effects
   useEffect(() => {
@@ -324,6 +327,16 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
             res.highlighted = true;
           }
 
+          return res;
+        }
+
+        // Focused diff symbol glow (pulsing amber, highest diff priority)
+        const focusedSymbol = diffFocusedRef.current;
+        if (focusedSymbol && node === focusedSymbol) {
+          res.color = '#fbbf24';
+          res.size = (data.size || 8) * 2.2;
+          res.zIndex = 4;
+          res.highlighted = true;
           return res;
         }
 

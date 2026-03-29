@@ -184,6 +184,24 @@ interface AppState {
   startDiff: (base: string, head?: string) => Promise<void>;
   exitDiffMode: () => void;
   setSelectedDiffFile: (filePath: string | null) => void;
+
+  // Diff UX (view modes, bidirectional linking, filtering)
+  diffViewMode: 'focus' | 'structure' | 'review';
+  setDiffViewMode: (mode: 'focus' | 'structure' | 'review') => void;
+  diffFocusedSymbolId: string | null;
+  setDiffFocusedSymbolId: (id: string | null) => void;
+  diffGraphFilter: 'all' | 'impacted';
+  setDiffGraphFilter: (filter: 'all' | 'impacted') => void;
+  diffGraphDepth: number;
+  setDiffGraphDepth: (depth: number) => void;
+  diffRiskChipFilter: string | null;
+  setDiffRiskChipFilter: (category: string | null) => void;
+  diffFileGrouping: 'flat' | 'module' | 'changeType' | 'risk';
+  setDiffFileGrouping: (grouping: 'flat' | 'module' | 'changeType' | 'risk') => void;
+  reviewFlowActive: boolean;
+  setReviewFlowActive: (active: boolean) => void;
+  reviewFlowStep: number;
+  setReviewFlowStep: (step: number) => void;
 }
 
 const AppStateContext = createContext<AppState | null>(null);
@@ -327,6 +345,16 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
   const [diffChangedNodeIds, setDiffChangedNodeIds] = useState<Set<string>>(new Set());
   const [diffAffectedProcessIds, setDiffAffectedProcessIds] = useState<Set<string>>(new Set());
+
+  // Diff UX state
+  const [diffViewMode, setDiffViewMode] = useState<'focus' | 'structure' | 'review'>('review');
+  const [diffFocusedSymbolId, setDiffFocusedSymbolId] = useState<string | null>(null);
+  const [diffGraphFilter, setDiffGraphFilter] = useState<'all' | 'impacted'>('all');
+  const [diffGraphDepth, setDiffGraphDepth] = useState<number>(1);
+  const [diffRiskChipFilter, setDiffRiskChipFilter] = useState<string | null>(null);
+  const [diffFileGrouping, setDiffFileGrouping] = useState<'flat' | 'module' | 'changeType' | 'risk'>('flat');
+  const [reviewFlowActive, setReviewFlowActive] = useState(false);
+  const [reviewFlowStep, setReviewFlowStep] = useState(0);
 
     const normalizePath = useCallback((p: string) => {
     return p.replace(/\\/g, '/').replace(/^\.?\//, '');
@@ -1151,6 +1179,14 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setSelectedDiffFile(null);
     setDiffChangedNodeIds(new Set());
     setDiffAffectedProcessIds(new Set());
+    setDiffViewMode('review');
+    setDiffFocusedSymbolId(null);
+    setDiffGraphFilter('all');
+    setDiffGraphDepth(1);
+    setDiffRiskChipFilter(null);
+    setDiffFileGrouping('flat');
+    setReviewFlowActive(false);
+    setReviewFlowStep(0);
   }, []);
 
   const toggleLabelVisibility = useCallback((label: NodeLabel) => {
@@ -1272,6 +1308,23 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     startDiff,
     exitDiffMode,
     setSelectedDiffFile,
+    // Diff UX
+    diffViewMode,
+    setDiffViewMode,
+    diffFocusedSymbolId,
+    setDiffFocusedSymbolId,
+    diffGraphFilter,
+    setDiffGraphFilter,
+    diffGraphDepth,
+    setDiffGraphDepth,
+    diffRiskChipFilter,
+    setDiffRiskChipFilter,
+    diffFileGrouping,
+    setDiffFileGrouping,
+    reviewFlowActive,
+    setReviewFlowActive,
+    reviewFlowStep,
+    setReviewFlowStep,
   };
 
   return (

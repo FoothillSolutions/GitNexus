@@ -10,6 +10,7 @@ import { StatusBar } from './components/StatusBar';
 import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
 import { DiffPanel } from './components/diff';
+import { DiffStructureOverlay } from './components/diff/DiffStructureOverlay';
 import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
@@ -44,6 +45,8 @@ const AppContent = () => {
     hydrateWorkerFromServer,
     isDiffMode,
     diffData,
+    diffViewMode,
+    setDiffViewMode,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
@@ -280,24 +283,53 @@ const AppContent = () => {
     return <LoadingOverlay progress={progress} />;
   }
 
+  // View mode keyboard shortcuts (1/2/3)
+  useEffect(() => {
+    if (!isDiffMode) return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '1') setDiffViewMode('focus');
+      else if (e.key === '2') setDiffViewMode('structure');
+      else if (e.key === '3') setDiffViewMode('review');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isDiffMode, setDiffViewMode]);
+
+  const isFocusMode = isDiffMode && diffViewMode === 'focus';
+  const isStructureMode = isDiffMode && diffViewMode === 'structure';
+
   // Exploring view
   return (
     <div className="flex flex-col h-screen bg-void overflow-hidden">
       <Header onFocusNode={handleFocusNode} availableRepos={availableRepos} onSwitchRepo={switchRepo} />
 
       <main className="flex-1 flex min-h-0">
-        {/* Left Panel - File Tree */}
-        <FileTreePanel onFocusNode={handleFocusNode} />
+        {/* Left Panel - File Tree (hidden in focus mode) */}
+        {!isFocusMode && <FileTreePanel onFocusNode={handleFocusNode} />}
 
         {/* Graph area - takes remaining space */}
         <div className="flex-1 relative min-w-0">
-          <GraphCanvas ref={graphCanvasRef} />
+          {/* Graph (hidden in focus mode) */}
+          {!isFocusMode && <GraphCanvas ref={graphCanvasRef} />}
 
-          {/* Diff Panel (overlay) - replaces code panel when diff mode active */}
+          {/* Diff Panel */}
           {isDiffMode && diffData ? (
-            <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
-              <DiffPanel onFocusNode={handleFocusNode} />
-            </div>
+            isFocusMode ? (
+              // Focus mode: DiffPanel fills entire area
+              <DiffPanel onFocusNode={handleFocusNode} fullWidth />
+            ) : isStructureMode ? (
+              // Structure mode: floating stats overlay on graph
+              <div className="absolute top-4 left-4 z-30 pointer-events-auto">
+                <DiffStructureOverlay />
+              </div>
+            ) : (
+              // Review mode: overlay on left side of graph
+              <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
+                <DiffPanel onFocusNode={handleFocusNode} />
+              </div>
+            )
           ) : (
             /* Code References Panel (overlay) - does NOT resize the graph, it overlaps on top */
             isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
@@ -308,8 +340,8 @@ const AppContent = () => {
           )}
         </div>
 
-        {/* Right Panel - Code & Chat (tabbed) */}
-        {isRightPanelOpen && <RightPanel />}
+        {/* Right Panel - Code & Chat (hidden in focus mode) */}
+        {!isFocusMode && isRightPanelOpen && <RightPanel />}
       </main>
 
       <StatusBar />
