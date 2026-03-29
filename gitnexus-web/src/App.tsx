@@ -256,6 +256,23 @@ const AppContent = () => {
     initializeAgent();
   }, [refreshLLMSettings, initializeAgent]);
 
+  // View mode keyboard shortcuts (1/2/3) — must be before conditional returns
+  useEffect(() => {
+    if (!isDiffMode) return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '1') setDiffViewMode('focus');
+      else if (e.key === '2') setDiffViewMode('structure');
+      else if (e.key === '3') setDiffViewMode('review');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isDiffMode, setDiffViewMode]);
+
+  const isFocusMode = isDiffMode && diffViewMode === 'focus';
+  const isStructureMode = isDiffMode && diffViewMode === 'structure';
+
   // Render based on view mode
   if (viewMode === 'onboarding') {
     return (
@@ -282,23 +299,6 @@ const AppContent = () => {
   if (viewMode === 'loading' && progress) {
     return <LoadingOverlay progress={progress} />;
   }
-
-  // View mode keyboard shortcuts (1/2/3)
-  useEffect(() => {
-    if (!isDiffMode) return;
-    const handler = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
-      if (e.key === '1') setDiffViewMode('focus');
-      else if (e.key === '2') setDiffViewMode('structure');
-      else if (e.key === '3') setDiffViewMode('review');
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [isDiffMode, setDiffViewMode]);
-
-  const isFocusMode = isDiffMode && diffViewMode === 'focus';
-  const isStructureMode = isDiffMode && diffViewMode === 'structure';
 
   // Exploring view
   return (
