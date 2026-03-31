@@ -11,7 +11,7 @@ const RISK_COLORS: Record<string, string> = {
 };
 
 export const DiffAISummary = ({ data }: { data: DiffResult }) => {
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const insight = useMemo(() => generateDiffInsight(data), [data]);
   const RiskIcon = RISK_ICONS[data.summary.riskLevel] || Info;
   const riskColor = RISK_COLORS[data.summary.riskLevel] || 'text-gray-400';

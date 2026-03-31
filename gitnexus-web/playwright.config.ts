@@ -2,12 +2,15 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e',
-  timeout: 60_000,
+  timeout: 120_000,
   retries: 0,
   use: {
-    baseURL: 'http://localhost:5178',
+    baseURL: 'http://localhost:5175',
     headless: true,
     screenshot: 'only-on-failure',
+    launchOptions: {
+      args: ['--enable-webgl', '--use-gl=swiftshader', '--enable-unsafe-swiftshader'],
+    },
   },
   projects: [
     {

@@ -180,20 +180,22 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   const setSelectedNode = useCallback((nodeId: string | null) => {
     selectedNodeRef.current = nodeId;
     setSelectedNodeState(nodeId);
-    
+
     const sigma = sigmaRef.current;
     if (!sigma) return;
-    
-    // Tiny camera nudge to force edge refresh (workaround for Sigma edge caching)
+
+    // Immediate refresh to re-run nodeReducer with new selection
+    sigma.refresh();
+
+    // Tiny camera nudge to force edge/label cache invalidation
     const camera = sigma.getCamera();
     const currentRatio = camera.ratio;
-    // Imperceptible zoom change that triggers re-render
     camera.animate(
       { ratio: currentRatio * 1.0001 },
       { duration: 50 }
     );
-    
-    sigma.refresh();
+    // Second refresh after animation to ensure labels are fully updated
+    setTimeout(() => sigma.refresh(), 60);
   }, []);
 
   // Initialize Sigma ONCE
@@ -276,12 +278,12 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
       
       nodeReducer: (node, data) => {
         const res = { ...data };
-        
+
         if (data.hidden) {
           res.hidden = true;
           return res;
         }
-        
+
         const currentSelected = selectedNodeRef.current;
         const highlighted = highlightedRef.current;
         const blastRadius = blastRadiusRef.current;
@@ -330,17 +332,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
           return res;
         }
 
-        // Focused diff symbol glow (pulsing amber, highest diff priority)
-        const focusedSymbol = diffFocusedRef.current;
-        if (focusedSymbol && node === focusedSymbol) {
-          res.color = '#fbbf24';
-          res.size = (data.size || 8) * 2.2;
-          res.zIndex = 4;
-          res.highlighted = true;
-          return res;
-        }
-
-        // Diff mode highlighting (amber) — priority after animations
+        // Diff mode highlighting (amber)
         if (hasDiffNodes && !currentSelected) {
           if (isDiffNode) {
             res.color = '#f59e0b'; // Amber for changed symbols
@@ -411,14 +403,14 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
               res.size = (data.size || 8) * 1.8;
               res.zIndex = 2;
               res.highlighted = true;
+              res.forceLabel = true;
             } else if (isNeighbor) {
               res.color = data.color;
               res.size = (data.size || 8) * 1.3;
               res.zIndex = 1;
+              res.forceLabel = true;
             } else {
-              res.color = dimColor(data.color, 0.25);
-              res.size = (data.size || 8) * 0.6;
-              res.zIndex = 0;
+              res.hidden = true;
             }
           }
         }
@@ -428,7 +420,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
       
       edgeReducer: (edge, data) => {
         const res = { ...data };
-        
+
         // Check edge type visibility first
         const visibleTypes = visibleEdgeTypesRef.current;
         if (visibleTypes && data.relationType) {
@@ -437,7 +429,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
             return res;
           }
         }
-        
+
         const currentSelected = selectedNodeRef.current;
         const highlighted = highlightedRef.current;
         const blastRadius = blastRadiusRef.current;
@@ -506,6 +498,8 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     });
 
     sigmaRef.current = sigma;
+    // Expose for testing/debugging
+    (window as any).__SIGMA__ = sigma;
 
     sigma.on('clickNode', ({ node }) => {
       setSelectedNode(node);
@@ -610,23 +604,27 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     const graph = graphRef.current;
     if (!sigma || !graph || !graph.hasNode(nodeId)) return;
 
-    // Skip if already focused on this node (prevents double-click issues)
     const alreadySelected = selectedNodeRef.current === nodeId;
-    
-    // Set selection state directly (without the camera nudge from setSelectedNode)
+
+    // Update selection
     selectedNodeRef.current = nodeId;
     setSelectedNodeState(nodeId);
-    
-    // Only animate camera if selecting a new node
+
+    // Immediate refresh to clear old neighbor labels and set new ones
+    sigma.refresh();
+
+    // Animate camera to new node (keep current zoom or zoom to 0.4, whichever is closer)
     if (!alreadySelected) {
       const nodeAttrs = graph.getNodeAttributes(nodeId);
+      const currentRatio = sigma.getCamera().ratio;
+      const targetRatio = Math.min(currentRatio, 0.4);
       sigma.getCamera().animate(
-        { x: nodeAttrs.x, y: nodeAttrs.y, ratio: 0.15 },
+        { x: nodeAttrs.x, y: nodeAttrs.y, ratio: targetRatio },
         { duration: 400 }
       );
     }
-    
-    sigma.refresh();
+    // Post-animation refresh to ensure labels are fully updated
+    setTimeout(() => sigma.refresh(), 420);
   }, []);
 
   const zoomIn = useCallback(() => {

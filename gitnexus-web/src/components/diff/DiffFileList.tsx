@@ -16,11 +16,12 @@ interface DiffFileListProps {
   files: DiffFile[];
   selectedFile: string | null;
   onSelectFile: (path: string) => void;
+  onHoverFile?: (path: string | null) => void;
   loading?: boolean;
   groupBy?: 'flat' | 'module' | 'changeType' | 'risk';
 }
 
-export const DiffFileList = ({ files, selectedFile, onSelectFile, loading, groupBy = 'flat' }: DiffFileListProps) => {
+export const DiffFileList = ({ files, selectedFile, onSelectFile, onHoverFile, loading, groupBy = 'flat' }: DiffFileListProps) => {
   if (loading) {
     return (
       <div className="w-52 flex-shrink-0 border-r border-border-subtle p-3 space-y-3">
@@ -36,7 +37,7 @@ export const DiffFileList = ({ files, selectedFile, onSelectFile, loading, group
   }
 
   return (
-    <div className="w-52 flex-shrink-0 border-r border-border-subtle overflow-y-auto scrollbar-thin">
+    <div className="w-52 flex-shrink-0 border-r border-border-subtle overflow-y-auto scrollbar-thin" data-testid="diff-file-list">
       {files.map(file => {
         const Icon = STATUS_ICONS[file.status] || FileEdit;
         const color = STATUS_COLORS[file.status] || '#6b7280';
@@ -68,6 +69,8 @@ export const DiffFileList = ({ files, selectedFile, onSelectFile, loading, group
           <button
             key={file.filePath}
             onClick={() => onSelectFile(file.filePath)}
+            onMouseEnter={() => onHoverFile?.(file.filePath)}
+            onMouseLeave={() => onHoverFile?.(null)}
             className={`w-full flex items-stretch text-left transition-colors ${
               isSelected
                 ? `${statusBg} text-text-primary`

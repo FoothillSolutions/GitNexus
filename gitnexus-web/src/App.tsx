@@ -11,6 +11,7 @@ import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
 import { DiffPanel } from './components/diff';
 import { DiffStructureOverlay } from './components/diff/DiffStructureOverlay';
+import { BranchDiffDialog } from './components/BranchDiffDialog';
 import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
@@ -45,8 +46,13 @@ const AppContent = () => {
     hydrateWorkerFromServer,
     isDiffMode,
     diffData,
+    diffLoading,
+    diffError,
     diffViewMode,
     setDiffViewMode,
+    setPendingServerResult,
+    isDiffPanelCollapsed,
+    toggleDiffPanel,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
@@ -140,55 +146,14 @@ const AppContent = () => {
   }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddings, initializeAgent]);
 
   const handleServerConnect = useCallback((result: ConnectToServerResult) => {
-    // Extract project name from repoPath
+    // Store result and set project name (needed for fetchBranches), then show branch picker
     const repoPath = result.repoInfo.repoPath;
-    const projectName = repoPath.split('/').pop() || 'server-project';
-    setProjectName(projectName);
-
-    // Build KnowledgeGraph from server data (bypasses WASM pipeline entirely)
-    const graph = createKnowledgeGraph();
-    for (const node of result.nodes) {
-      graph.addNode(node);
-    }
-    for (const rel of result.relationships) {
-      graph.addRelationship(rel);
-    }
-    setGraph(graph);
-
-    // Set file contents from extracted File node content
-    const fileMap = new Map<string, string>();
-    for (const [path, content] of Object.entries(result.fileContents)) {
-      fileMap.set(path, content);
-    }
-    setFileContents(fileMap);
-
-    // Transition directly to exploring view
-    setViewMode('exploring');
+    const pName = result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
+    setProjectName(pName);
+    setPendingServerResult(result);
     setProgress(null);
-
-    // Hydrate the worker-side DB (LadybugDB + BM25) so Query/Processes/embeddings work
-    hydrateWorkerFromServer(result.nodes, result.relationships, result.fileContents).then(() => {
-      // Initialize agent if LLM is configured
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      // Auto-start embeddings (now that LadybugDB is ready)
-      startEmbeddings().catch((err) => {
-        if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-          startEmbeddings('wasm').catch(console.warn);
-        } else {
-          console.warn('Embeddings auto-start failed:', err);
-        }
-      });
-    }).catch((err) => {
-      console.warn('Worker hydration failed (non-fatal):', err);
-      // Still initialize agent even if hydration fails
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-    });
-  }, [setViewMode, setGraph, setFileContents, setProjectName, setProgress, initializeAgent, startEmbeddings, hydrateWorkerFromServer]);
+    setViewMode('branch-picker');
+  }, [setViewMode, setProjectName, setProgress, setPendingServerResult]);
 
   // Auto-connect when ?server query param is present (bookmarkable shortcut)
   const autoConnectRan = useRef(false);
@@ -300,6 +265,10 @@ const AppContent = () => {
     return <LoadingOverlay progress={progress} />;
   }
 
+  if (viewMode === 'branch-picker') {
+    return <BranchDiffDialog />;
+  }
+
   // Exploring view
   return (
     <div className="flex flex-col h-screen bg-void overflow-hidden">
@@ -310,12 +279,12 @@ const AppContent = () => {
         {!isFocusMode && <FileTreePanel onFocusNode={handleFocusNode} />}
 
         {/* Graph area - takes remaining space */}
-        <div className="flex-1 relative min-w-0">
+        <div className="flex-1 relative min-w-0 overflow-hidden">
           {/* Graph (hidden in focus mode) */}
           {!isFocusMode && <GraphCanvas ref={graphCanvasRef} />}
 
           {/* Diff Panel */}
-          {isDiffMode && diffData ? (
+          {isDiffMode && (diffData || diffLoading || diffError) ? (
             isFocusMode ? (
               // Focus mode: DiffPanel fills entire area
               <DiffPanel onFocusNode={handleFocusNode} fullWidth />
@@ -325,10 +294,24 @@ const AppContent = () => {
                 <DiffStructureOverlay />
               </div>
             ) : (
-              // Review mode: overlay on left side of graph
-              <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
-                <DiffPanel onFocusNode={handleFocusNode} />
-              </div>
+              // Review mode: collapsible overlay on left side of graph
+              <>
+                <div
+                  className="absolute inset-y-0 left-0 z-30 pointer-events-auto transition-transform duration-300 ease-in-out"
+                  style={{ transform: isDiffPanelCollapsed ? 'translateX(-100%)' : 'translateX(0)' }}
+                >
+                  <DiffPanel onFocusNode={handleFocusNode} />
+                </div>
+                {isDiffPanelCollapsed && (
+                  <button
+                    onClick={toggleDiffPanel}
+                    className="absolute left-0 top-4 z-30 w-7 h-20 flex items-center justify-center bg-surface/90 border border-l-0 border-border-subtle rounded-r-lg text-text-secondary hover:bg-hover hover:text-amber-300 transition-colors pointer-events-auto backdrop-blur-sm"
+                    title="Expand diff panel"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+                  </button>
+                )}
+              </>
             )
           ) : (
             /* Code References Panel (overlay) - does NOT resize the graph, it overlaps on top */

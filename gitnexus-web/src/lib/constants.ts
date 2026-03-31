@@ -63,19 +63,9 @@ export const getCommunityColor = (communityIndex: number): string => {
   return COMMUNITY_COLORS[communityIndex % COMMUNITY_COLORS.length];
 };
 
-// Labels to show by default (hide imports and variables by default as they clutter)
+// Labels to show by default (only Files — others hidden to reduce clutter)
 export const DEFAULT_VISIBLE_LABELS: NodeLabel[] = [
-  'Project',
-  'Package',
-  'Module',
-  'Folder',
   'File',
-  'Class',
-  'Function',
-  'Method',
-  'Interface',
-  'Enum',
-  'Type',
 ];
 
 // All filterable labels

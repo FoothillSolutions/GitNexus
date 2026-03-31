@@ -38,6 +38,13 @@ export const DiffPanel = ({ onFocusNode, fullWidth }: DiffPanelProps) => {
     return saved ? Math.max(500, Math.min(1200, parseInt(saved))) : 720;
   });
   const [activeCommit, setActiveCommit] = useState<string | null>(null);
+  const [isSummaryExpanded, setIsSummaryExpanded] = useState(false);
+
+  // Click file in diff → select file in diff view only (no graph selection)
+  const handleSelectFile = useCallback((filePath: string) => {
+    setSelectedDiffFile(filePath);
+  }, [setSelectedDiffFile]);
+
   // Preserve original base/head refs for "Show All" after timeline navigation
   const originalRefsRef = useRef<{ base: string; head: string } | null>(null);
   const resizeRef = useRef<{ startX: number; startWidth: number } | null>(null);
@@ -225,12 +232,13 @@ export const DiffPanel = ({ onFocusNode, fullWidth }: DiffPanelProps) => {
       className="h-full flex flex-col bg-deep border-r border-border-subtle relative"
       style={{ width: fullWidth ? '100%' : panelWidth }}
       tabIndex={0}
+      data-testid="diff-panel"
     >
-      {/* Summary header */}
-      <DiffSummaryHeader data={diffData} onClose={exitDiffMode} />
+      {/* Summary header (condensed by default, expandable) */}
+      <DiffSummaryHeader data={diffData} onClose={exitDiffMode} onExpandChange={setIsSummaryExpanded} />
 
-      {/* AI Summary (collapsible) */}
-      {prefs.showAISummary && <DiffAISummary data={diffData} />}
+      {/* AI Summary — only shown when summary header is expanded */}
+      {isSummaryExpanded && prefs.showAISummary && <DiffAISummary data={diffData} />}
 
       {/* Timeline bar */}
       {diffData.commits.length > 0 && (
@@ -258,7 +266,7 @@ export const DiffPanel = ({ onFocusNode, fullWidth }: DiffPanelProps) => {
         <DiffFileList
           files={filteredFiles}
           selectedFile={selectedDiffFile}
-          onSelectFile={setSelectedDiffFile}
+          onSelectFile={handleSelectFile}
           loading={diffLoading}
           groupBy={diffFileGrouping}
         />

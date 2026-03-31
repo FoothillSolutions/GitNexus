@@ -16,7 +16,7 @@ import { fetchRepos, connectToServer } from '../services/server-connection';
 import type { DiffResult } from '../types/diff';
 import { fetchDiff } from '../services/backend';
 
-export type ViewMode = 'onboarding' | 'loading' | 'exploring';
+export type ViewMode = 'onboarding' | 'loading' | 'branch-picker' | 'exploring';
 export type RightPanelTab = 'code' | 'chat';
 export type EmbeddingStatus = 'idle' | 'loading' | 'embedding' | 'indexing' | 'ready' | 'error';
 
@@ -172,6 +172,15 @@ interface AppState {
   clearAICodeReferences: () => void;
   clearCodeReferences: () => void;
   codeReferenceFocus: CodeReferenceFocus | null;
+
+  // Branch picker (shown before graph init on server connect)
+  pendingServerResult: ConnectToServerResult | null;
+  setPendingServerResult: (result: ConnectToServerResult | null) => void;
+  commitServerConnection: () => void;
+
+  // Diff panel collapse
+  isDiffPanelCollapsed: boolean;
+  toggleDiffPanel: () => void;
 
   // Diff visualization
   isDiffMode: boolean;
@@ -337,6 +346,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [isCodePanelOpen, setCodePanelOpen] = useState(false);
   const [codeReferenceFocus, setCodeReferenceFocus] = useState<CodeReferenceFocus | null>(null);
 
+  // Branch picker state (server connect → branch picker → graph init)
+  const [pendingServerResult, setPendingServerResult] = useState<ConnectToServerResult | null>(null);
+
+  // Diff panel collapse
+  const [isDiffPanelCollapsed, setIsDiffPanelCollapsed] = useState(false);
+  const toggleDiffPanel = useCallback(() => setIsDiffPanelCollapsed(prev => !prev), []);
+
   // Diff visualization state
   const [isDiffMode, setIsDiffMode] = useState(false);
   const [diffData, setDiffData] = useState<DiffResult | null>(null);
@@ -350,7 +366,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [diffViewMode, setDiffViewMode] = useState<'focus' | 'structure' | 'review'>('review');
   const [diffFocusedSymbolId, setDiffFocusedSymbolId] = useState<string | null>(null);
   const [diffGraphFilter, setDiffGraphFilter] = useState<'all' | 'impacted'>('all');
-  const [diffGraphDepth, setDiffGraphDepth] = useState<number>(1);
+  const [diffGraphDepth, setDiffGraphDepth] = useState<number>(0);
   const [diffRiskChipFilter, setDiffRiskChipFilter] = useState<string | null>(null);
   const [diffFileGrouping, setDiffFileGrouping] = useState<'flat' | 'module' | 'changeType' | 'risk'>('flat');
   const [reviewFlowActive, setReviewFlowActive] = useState(false);
@@ -1148,10 +1164,48 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setCodeReferenceFocus(null);
   }, []);
 
+  // Commit a pending server connection (builds graph, hydrates worker, transitions to exploring)
+  const commitServerConnection = useCallback(() => {
+    const result = pendingServerResult;
+    if (!result) return;
+
+    const repoPath = result.repoInfo.repoPath;
+    const pName = result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
+    setProjectName(pName);
+
+    const kg = createKnowledgeGraph();
+    for (const node of result.nodes) kg.addNode(node);
+    for (const rel of result.relationships) kg.addRelationship(rel);
+    setGraph(kg);
+
+    const fileMap = new Map<string, string>();
+    for (const [p, c] of Object.entries(result.fileContents)) fileMap.set(p, c);
+    setFileContents(fileMap);
+
+    setViewMode('exploring');
+    setProgress(null);
+    setPendingServerResult(null);
+
+    hydrateWorkerFromServer(result.nodes, result.relationships, result.fileContents).then(() => {
+      if (getActiveProviderConfig()) initializeAgent(pName);
+      startEmbeddings().catch((err) => {
+        if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
+          startEmbeddings('wasm').catch(console.warn);
+        } else {
+          console.warn('Embeddings auto-start failed:', err);
+        }
+      });
+    }).catch((err) => {
+      console.warn('Worker hydration failed (non-fatal):', err);
+      if (getActiveProviderConfig()) initializeAgent(pName);
+    });
+  }, [pendingServerResult, setGraph, setFileContents, setProjectName, setViewMode, setProgress, hydrateWorkerFromServer, initializeAgent, startEmbeddings]);
+
   // Diff visualization actions
   const startDiff = useCallback(async (base: string, head?: string) => {
     setDiffLoading(true);
     setDiffError(null);
+    setIsDiffMode(true);
     try {
       const result = await fetchDiff(projectName, base, head);
       if (result.error) {
@@ -1159,7 +1213,6 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
         return;
       }
       setDiffData(result);
-      setIsDiffMode(true);
       setDiffChangedNodeIds(new Set(result.changedSymbols.map(s => s.id)));
       setDiffAffectedProcessIds(new Set(result.affectedProcesses.map(p => p.id)));
       if (result.files.length > 0) {
@@ -1172,6 +1225,39 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     }
   }, [projectName]);
 
+  // Enrich diffChangedNodeIds with File nodes once both graph and diffData are available
+  useEffect(() => {
+    if (!graph || !diffData || !isDiffMode) return;
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+
+    // Build lookup sets: full paths + filenames
+    const changedFullPaths = new Set(diffData.files.map(f => norm(f.filePath)));
+    const changedFileNames = new Set(diffData.files.map(f => norm(f.filePath).split('/').pop() || ''));
+
+    const extraIds: string[] = [];
+    for (const node of graph.nodes) {
+      if (node.label !== 'File' || !node.properties.filePath) continue;
+      const nodePath = norm(node.properties.filePath);
+      const nodeName = nodePath.split('/').pop() || '';
+
+      // Exact path, suffix match, or filename match
+      const match = changedFullPaths.has(nodePath)
+        || [...changedFullPaths].some(cp => cp.endsWith(nodePath) || nodePath.endsWith(cp))
+        || changedFileNames.has(nodeName);
+
+      if (match) {
+        extraIds.push(node.id);
+      }
+    }
+    if (extraIds.length > 0) {
+      setDiffChangedNodeIds(prev => {
+        const next = new Set(prev);
+        for (const id of extraIds) next.add(id);
+        return next;
+      });
+    }
+  }, [graph, diffData, isDiffMode]);
+
   const exitDiffMode = useCallback(() => {
     setIsDiffMode(false);
     setDiffData(null);
@@ -1182,11 +1268,12 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setDiffViewMode('review');
     setDiffFocusedSymbolId(null);
     setDiffGraphFilter('all');
-    setDiffGraphDepth(1);
+    setDiffGraphDepth(0);
     setDiffRiskChipFilter(null);
     setDiffFileGrouping('flat');
     setReviewFlowActive(false);
     setReviewFlowStep(0);
+    setIsDiffPanelCollapsed(false);
   }, []);
 
   const toggleLabelVisibility = useCallback((label: NodeLabel) => {
@@ -1297,6 +1384,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     clearAICodeReferences,
     clearCodeReferences,
     codeReferenceFocus,
+    // Branch picker
+    pendingServerResult,
+    setPendingServerResult,
+    commitServerConnection,
+    // Diff panel collapse
+    isDiffPanelCollapsed,
+    toggleDiffPanel,
     // Diff visualization
     isDiffMode,
     diffData,
