@@ -53,6 +53,10 @@ const AppContent = () => {
     setPendingServerResult,
     isDiffPanelCollapsed,
     toggleDiffPanel,
+    startDiff,
+    commitServerConnection,
+    setDiffGraphFilter,
+    pendingServerResult,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
@@ -157,11 +161,18 @@ const AppContent = () => {
 
   // Auto-connect when ?server query param is present (bookmarkable shortcut)
   const autoConnectRan = useRef(false);
+  const pendingAutoDiff = useRef<{ base: string; head?: string } | null>(null);
   useEffect(() => {
     if (autoConnectRan.current) return;
     const params = new URLSearchParams(window.location.search);
     if (!params.has('server')) return;
     autoConnectRan.current = true;
+
+    const autoDiffBase = params.get('base');
+    const autoDiffHead = params.get('head');
+    if (autoDiffBase) {
+      pendingAutoDiff.current = { base: autoDiffBase, head: autoDiffHead || undefined };
+    }
 
     // Clean the URL so a refresh won't re-trigger
     const cleanUrl = window.location.pathname + window.location.hash;
@@ -209,6 +220,17 @@ const AppContent = () => {
       }, 3000);
     });
   }, [handleServerConnect, setProgress, setViewMode, setServerBaseUrl, setAvailableRepos]);
+
+  // Auto-diff: when branch-picker shows and we have pending auto-diff params, skip it
+  // Must wait for pendingServerResult so commitServerConnection has the data it needs
+  useEffect(() => {
+    if (viewMode !== 'branch-picker' || !pendingAutoDiff.current || !pendingServerResult) return;
+    const { base, head } = pendingAutoDiff.current;
+    pendingAutoDiff.current = null;
+    commitServerConnection();
+    setDiffGraphFilter('impacted');
+    startDiff(base, head);
+  }, [viewMode, pendingServerResult, commitServerConnection, setDiffGraphFilter, startDiff]);
 
   const handleFocusNode = useCallback((nodeId: string) => {
     graphCanvasRef.current?.focusNode(nodeId);

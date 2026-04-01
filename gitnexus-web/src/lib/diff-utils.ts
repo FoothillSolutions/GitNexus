@@ -1,5 +1,5 @@
 import { diffWords } from 'diff';
-import type { DiffHunk, DiffSymbol } from '../types/diff';
+import type { DiffFile, DiffHunk, DiffSymbol } from '../types/diff';
 
 // ── Change Classification ────────────────────────────────────────────────
 
