@@ -6,8 +6,8 @@ import topLevelAwait from 'vite-plugin-top-level-await';
 import { viteStaticCopy } from 'vite-plugin-static-copy';
 import path from 'path';
 
-export default defineConfig({
-  base: process.env.VITE_BASE_PATH || '/',
+export default defineConfig(({ mode }) => ({
+  base: mode === 'embedded' ? '/gitnexus-web/' : '/',
   plugins: [
     react(),
     tailwindcss(),
@@ -64,4 +64,4 @@ export default defineConfig({
     format: 'es',
     plugins: () => [wasm(), topLevelAwait()],
   },
-});
+}));
