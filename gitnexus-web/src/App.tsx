@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppStateProvider, useAppState } from './hooks/useAppState';
 import { DropZone } from './components/DropZone';
 import { LoadingOverlay } from './components/LoadingOverlay';
@@ -12,6 +12,7 @@ import { CodeReferencesPanel } from './components/CodeReferencesPanel';
 import { DiffPanel } from './components/diff';
 import { DiffStructureOverlay } from './components/diff/DiffStructureOverlay';
 import { BranchDiffDialog } from './components/BranchDiffDialog';
+import { KeyboardShortcutsDialog } from './components/KeyboardShortcutsDialog';
 import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
@@ -57,9 +58,13 @@ const AppContent = () => {
     commitServerConnection,
     setDiffGraphFilter,
     pendingServerResult,
+    selectedDiffFile,
+    setSelectedDiffFile,
+    exitDiffMode,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
+  const [isShortcutsDialogOpen, setIsShortcutsDialogOpen] = useState(false);
 
   const handleFileSelect = useCallback(async (file: File) => {
     const projectName = file.name.replace('.zip', '');
@@ -257,6 +262,61 @@ const AppContent = () => {
     return () => window.removeEventListener('keydown', handler);
   }, [isDiffMode, setDiffViewMode]);
 
+  // Step 5: Global keyboard shortcuts for diff navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      // ? — show keyboard shortcuts dialog (works always)
+      if (e.key === '?') {
+        e.preventDefault();
+        setIsShortcutsDialogOpen(prev => !prev);
+        return;
+      }
+
+      // Escape — close shortcuts dialog first, then exit diff mode
+      if (e.key === 'Escape') {
+        if (isShortcutsDialogOpen) {
+          setIsShortcutsDialogOpen(false);
+          return;
+        }
+        if (isDiffMode) {
+          exitDiffMode();
+          return;
+        }
+      }
+
+      if (!isDiffMode || !diffData) return;
+
+      // [ — previous file
+      if (e.key === '[') {
+        const idx = diffData.files.findIndex(f => f.filePath === selectedDiffFile);
+        if (idx > 0) {
+          setSelectedDiffFile(diffData.files[idx - 1].filePath);
+        }
+        return;
+      }
+
+      // ] — next file
+      if (e.key === ']') {
+        const idx = diffData.files.findIndex(f => f.filePath === selectedDiffFile);
+        if (idx < diffData.files.length - 1) {
+          setSelectedDiffFile(diffData.files[idx + 1].filePath);
+        }
+        return;
+      }
+
+      // f — toggle diff panel (file list)
+      if (e.key === 'f') {
+        toggleDiffPanel();
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isDiffMode, diffData, selectedDiffFile, setSelectedDiffFile, exitDiffMode, toggleDiffPanel, isShortcutsDialogOpen]);
+
   const isFocusMode = isDiffMode && diffViewMode === 'focus';
   const isStructureMode = isDiffMode && diffViewMode === 'structure';
 
@@ -356,6 +416,12 @@ const AppContent = () => {
         isOpen={isSettingsPanelOpen}
         onClose={() => setSettingsPanelOpen(false)}
         onSettingsSaved={handleSettingsSaved}
+      />
+
+      {/* Step 5: Keyboard shortcuts dialog */}
+      <KeyboardShortcutsDialog
+        isOpen={isShortcutsDialogOpen}
+        onClose={() => setIsShortcutsDialogOpen(false)}
       />
 
     </div>

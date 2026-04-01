@@ -29,6 +29,9 @@ export const DiffPanel = ({ onFocusNode, fullWidth }: DiffPanelProps) => {
     setReviewFlowActive,
     diffFileGrouping,
     diffRiskChipFilter,
+    diffFileSortBy,
+    setDiffFileSortBy,
+    setDiffFocusedSymbolId,
   } = useAppState();
 
   const { prefs, setPreference, togglePreference } = useDiffPreferences();
@@ -267,8 +270,11 @@ export const DiffPanel = ({ onFocusNode, fullWidth }: DiffPanelProps) => {
           files={filteredFiles}
           selectedFile={selectedDiffFile}
           onSelectFile={handleSelectFile}
+          onFocusGraphNode={(nodeId) => setDiffFocusedSymbolId(nodeId)}
           loading={diffLoading}
           groupBy={diffFileGrouping}
+          sortBy={diffFileSortBy}
+          onSortChange={setDiffFileSortBy}
         />
 
         {/* Diff content */}

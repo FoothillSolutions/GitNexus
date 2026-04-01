@@ -46,6 +46,30 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     return diffChangedNodeIds;
   }, [isDiffMode, diffChangedNodeIds]);
 
+  // Step 1: Build change size map for diff node sizing
+  const diffChangeSizeMap = useMemo(() => {
+    if (!isDiffMode || !diffData || !graph) return new Map<string, number>();
+    const sizeMap = new Map<string, number>();
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+    for (const file of diffData.files) {
+      const changeSize = file.additions + file.deletions;
+      // Map symbol IDs to change size
+      for (const sym of file.symbols) {
+        sizeMap.set(sym.id, changeSize);
+      }
+      // Map file nodes by path
+      const fp = norm(file.filePath);
+      for (const node of graph.nodes) {
+        if (node.label === 'File' && norm(node.properties.filePath) === fp) {
+          sizeMap.set(node.id, changeSize);
+        }
+      }
+      // Map injected diff file nodes
+      sizeMap.set(`diff_file_${fp}`, changeSize);
+    }
+    return sizeMap;
+  }, [isDiffMode, diffData, graph]);
+
   const effectiveHighlightedNodeIds = useMemo(() => {
     if (!isAIHighlightsEnabled) return highlightedNodeIds;
     const next = new Set(highlightedNodeIds);
@@ -149,6 +173,7 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     visibleEdgeTypes,
     diffNodeIds: effectiveDiffNodeIds,
     diffFocusedNodeId: diffFocusedSymbolId,
+    diffChangeSizeMap,
   });
 
   // Expose focusNode to parent via ref
@@ -298,6 +323,21 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
       setSigmaSelectedNode(null);
     }
   }, [appSelectedNode, setSigmaSelectedNode, isDiffMode]);
+
+  // Step 4: Animate camera to focused diff node (Diff→Graph linking)
+  useEffect(() => {
+    if (!isDiffMode || !diffFocusedSymbolId) return;
+    const sigma = sigmaRef.current;
+    if (!sigma) return;
+    const sigmaGraph = sigma.getGraph();
+    if (!sigmaGraph.hasNode(diffFocusedSymbolId)) return;
+    const attrs = sigmaGraph.getNodeAttributes(diffFocusedSymbolId);
+    const currentRatio = sigma.getCamera().ratio;
+    sigma.getCamera().animate(
+      { x: attrs.x, y: attrs.y, ratio: Math.min(currentRatio, 0.4) },
+      { duration: 400 }
+    );
+  }, [isDiffMode, diffFocusedSymbolId, sigmaRef]);
 
   // Focus on selected node
   const handleFocusSelected = useCallback(() => {

@@ -211,6 +211,8 @@ interface AppState {
   setReviewFlowActive: (active: boolean) => void;
   reviewFlowStep: number;
   setReviewFlowStep: (step: number) => void;
+  diffFileSortBy: 'changes' | 'risk' | 'alpha' | 'directory';
+  setDiffFileSortBy: (sort: 'changes' | 'risk' | 'alpha' | 'directory') => void;
 }
 
 const AppStateContext = createContext<AppState | null>(null);
@@ -371,6 +373,7 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [diffFileGrouping, setDiffFileGrouping] = useState<'flat' | 'module' | 'changeType' | 'risk'>('flat');
   const [reviewFlowActive, setReviewFlowActive] = useState(false);
   const [reviewFlowStep, setReviewFlowStep] = useState(0);
+  const [diffFileSortBy, setDiffFileSortBy] = useState<'changes' | 'risk' | 'alpha' | 'directory'>('changes');
 
     const normalizePath = useCallback((p: string) => {
     return p.replace(/\\/g, '/').replace(/^\.?\//, '');
@@ -1419,6 +1422,8 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setReviewFlowActive,
     reviewFlowStep,
     setReviewFlowStep,
+    diffFileSortBy,
+    setDiffFileSortBy,
   };
 
   return (

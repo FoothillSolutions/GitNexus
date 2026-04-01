@@ -391,13 +391,42 @@ export function classifyHunkIntent(hunk: DiffHunk): string | null {
   return null;
 }
 
+// ── File Sort Comparators (Step 6) ──────────────────────────────────────
+
+export type DiffFileSortBy = 'changes' | 'risk' | 'alpha' | 'directory';
+
+/** Sort by total change size (additions + deletions), descending */
+export function sortByChanges(a: DiffFile, b: DiffFile): number {
+  return (b.additions + b.deletions) - (a.additions + a.deletions);
+}
+
+/** Sort by risk (number of directly changed symbols), descending */
+export function sortByRisk(a: DiffFile, b: DiffFile): number {
+  const aRisk = a.symbols.filter(s => s.changeScope === 'directly_changed').length;
+  const bRisk = b.symbols.filter(s => s.changeScope === 'directly_changed').length;
+  return bRisk - aRisk;
+}
+
+/** Sort alphabetically by file path */
+export function sortByAlpha(a: DiffFile, b: DiffFile): number {
+  return a.filePath.localeCompare(b.filePath);
+}
+
+/** Sort by directory, then alphabetically within each directory */
+export function sortByDirectory(a: DiffFile, b: DiffFile): number {
+  const aDir = a.filePath.split('/').slice(0, -1).join('/');
+  const bDir = b.filePath.split('/').slice(0, -1).join('/');
+  if (aDir !== bDir) return aDir.localeCompare(bDir);
+  return a.filePath.localeCompare(b.filePath);
+}
+
 export function generateDiffInsight(data: DiffResult): DiffInsight {
   const { summary, changedSymbols, affectedProcesses, files } = data;
 
   // Count symbol types
   const typeCounts = new Map<string, number>();
   for (const sym of changedSymbols) {
-    const t = sym.type || 'unknown';
+    const t = sym.type || 'symbol';
     typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
   }
   const typeBreakdown = Array.from(typeCounts.entries())

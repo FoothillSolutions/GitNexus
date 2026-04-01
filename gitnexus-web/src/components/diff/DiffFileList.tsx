@@ -1,8 +1,8 @@
-import { useMemo } from 'react';
-import { FileCode, FilePlus2, FileMinus2, FileEdit, AlertTriangle, RefreshCw, ChevronDown, ChevronRight } from 'lucide-react';
-import { useState, useCallback } from 'react';
+import { useMemo, useState, useCallback } from 'react';
+import { FileCode, FilePlus2, FileMinus2, FileEdit, AlertTriangle, RefreshCw, ArrowUpDown } from 'lucide-react';
 import type { DiffFile } from '../../types/diff';
-import { generateFileIntent } from '../../lib/diff-utils';
+import { generateFileIntent, sortByChanges, sortByRisk, sortByAlpha, sortByDirectory } from '../../lib/diff-utils';
+import type { DiffFileSortBy } from '../../lib/diff-utils';
 
 const STATUS_ICONS: Record<string, typeof FileEdit> = {
   added: FilePlus2, modified: FileEdit, deleted: FileMinus2, renamed: FileCode,
@@ -12,16 +12,52 @@ const STATUS_COLORS: Record<string, string> = {
   added: '#22c55e', modified: '#f59e0b', deleted: '#ef4444', renamed: '#a78bfa',
 };
 
+const SORT_OPTIONS: { key: DiffFileSortBy; label: string }[] = [
+  { key: 'changes', label: 'Most changed' },
+  { key: 'risk', label: 'Highest risk' },
+  { key: 'alpha', label: 'Alphabetical' },
+  { key: 'directory', label: 'By directory' },
+];
+
 interface DiffFileListProps {
   files: DiffFile[];
   selectedFile: string | null;
   onSelectFile: (path: string) => void;
   onHoverFile?: (path: string | null) => void;
+  onFocusGraphNode?: (nodeId: string) => void;
   loading?: boolean;
   groupBy?: 'flat' | 'module' | 'changeType' | 'risk';
+  sortBy?: DiffFileSortBy;
+  onSortChange?: (sort: DiffFileSortBy) => void;
 }
 
-export const DiffFileList = ({ files, selectedFile, onSelectFile, onHoverFile, loading, groupBy = 'flat' }: DiffFileListProps) => {
+export const DiffFileList = ({ files, selectedFile, onSelectFile, onHoverFile, onFocusGraphNode, loading, groupBy = 'flat', sortBy = 'changes', onSortChange }: DiffFileListProps) => {
+  const [isSortOpen, setIsSortOpen] = useState(false);
+
+  // Sort files
+  const sortedFiles = useMemo(() => {
+    const sorted = [...files];
+    switch (sortBy) {
+      case 'changes': sorted.sort(sortByChanges); break;
+      case 'risk': sorted.sort(sortByRisk); break;
+      case 'alpha': sorted.sort(sortByAlpha); break;
+      case 'directory': sorted.sort(sortByDirectory); break;
+    }
+    return sorted;
+  }, [files, sortBy]);
+
+  const handleFileClick = useCallback((file: DiffFile) => {
+    onSelectFile(file.filePath);
+    // Step 4: Diff→Graph linking - find the corresponding graph node and focus it
+    if (onFocusGraphNode) {
+      // Try symbol IDs first, then fall back to file node
+      const directSymbol = file.symbols.find(s => s.changeScope === 'directly_changed');
+      if (directSymbol) {
+        onFocusGraphNode(directSymbol.id);
+      }
+    }
+  }, [onSelectFile, onFocusGraphNode]);
+
   if (loading) {
     return (
       <div className="w-52 flex-shrink-0 border-r border-border-subtle p-3 space-y-3">
@@ -38,7 +74,45 @@ export const DiffFileList = ({ files, selectedFile, onSelectFile, onHoverFile, l
 
   return (
     <div className="w-52 flex-shrink-0 border-r border-border-subtle overflow-y-auto scrollbar-thin" data-testid="diff-file-list">
-      {files.map(file => {
+      {/* Step 6: Sort dropdown */}
+      <div className="px-2 py-1.5 border-b border-border-subtle/50 flex items-center justify-between">
+        <span className="text-[10px] text-text-muted">{sortedFiles.length} files</span>
+        <div className="relative">
+          <button
+            onClick={() => setIsSortOpen(!isSortOpen)}
+            className="flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] text-text-muted hover:text-text-secondary hover:bg-hover transition-colors"
+            title="Sort files"
+          >
+            <ArrowUpDown className="w-3 h-3" />
+            <span>{SORT_OPTIONS.find(o => o.key === sortBy)?.label || 'Sort'}</span>
+          </button>
+          {isSortOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setIsSortOpen(false)} />
+              <div className="absolute right-0 top-full mt-1 z-50 bg-elevated border border-border-subtle rounded-lg shadow-lg py-1 min-w-[130px]">
+                {SORT_OPTIONS.map(opt => (
+                  <button
+                    key={opt.key}
+                    onClick={() => {
+                      onSortChange?.(opt.key);
+                      setIsSortOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-1.5 text-[11px] transition-colors ${
+                      sortBy === opt.key
+                        ? 'text-amber-300 bg-amber-500/10'
+                        : 'text-text-secondary hover:bg-hover hover:text-text-primary'
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      {sortedFiles.map(file => {
         const Icon = STATUS_ICONS[file.status] || FileEdit;
         const color = STATUS_COLORS[file.status] || '#6b7280';
         const isSelected = file.filePath === selectedFile;
@@ -68,7 +142,7 @@ export const DiffFileList = ({ files, selectedFile, onSelectFile, onHoverFile, l
         return (
           <button
             key={file.filePath}
-            onClick={() => onSelectFile(file.filePath)}
+            onClick={() => handleFileClick(file)}
             onMouseEnter={() => onHoverFile?.(file.filePath)}
             onMouseLeave={() => onHoverFile?.(null)}
             className={`w-full flex items-stretch text-left transition-colors ${

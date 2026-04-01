@@ -102,6 +102,18 @@ export const DEFAULT_VISIBLE_EDGES: EdgeType[] = [
   'CALLS',
 ];
 
+// Edge type colors for diff mode edge differentiation
+export const EDGE_TYPE_COLORS: Record<string, string> = {
+  CALLS: '#f59e0b',       // Amber
+  IMPORTS: '#3b82f6',     // Blue
+  EXTENDS: '#a855f7',     // Purple
+  IMPLEMENTS: '#a855f7',  // Purple
+  DEFINES: '#6b7280',     // Gray (structural)
+  HAS_METHOD: '#6b7280',  // Gray (structural)
+  HAS_PROPERTY: '#6b7280', // Gray (structural)
+  CONTAINS: '#374151',    // Dark gray (very subtle)
+};
+
 // Edge display info for UI
 export const EDGE_INFO: Record<EdgeType, { color: string; label: string }> = {
   CONTAINS: { color: '#2d5a3d', label: 'Contains' },
