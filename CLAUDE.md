@@ -106,6 +106,33 @@ gitnexus clean              # Delete index
 gitnexus wiki [path]        # Generate LLM-powered wiki
 ```
 
+## gitnexus-web Package
+
+`gitnexus-web` is a distributable npm package. Other projects (e.g., agent_playground) install it to embed the GitNexus web UI.
+
+**Package config** (`gitnexus-web/package.json`):
+- `"name": "gitnexus-web"` — the installable package name
+- `"files": ["dist"]` — only the built dist ships
+- `"prepack"` runs `build:embedded` automatically before `npm pack`
+- `"build:embedded"` builds with `--mode embedded` which sets `base: '/gitnexus-web/'` for subpath serving
+
+**After any change to `gitnexus-web/`**, you MUST rebuild and repack the package:
+```bash
+cd gitnexus-web
+npm run build:embedded    # build with /gitnexus-web/ base path
+npm pack                  # creates gitnexus-web-1.0.0.tgz
+```
+
+Then reinstall in consuming projects:
+```bash
+cd /path/to/agent_playground
+npm install /path/to/GitNexus/gitnexus-web/gitnexus-web-1.0.0.tgz
+```
+
+**Embedded mode** (`--mode embedded`): Sets Vite `base` to `/gitnexus-web/` so all asset paths are prefixed. This is required when the app is served under a subpath (e.g., `http://localhost:9000/gitnexus-web/`). Without it, assets resolve to `/assets/...` which 404s under subpath mounting.
+
+**Standalone mode** (default `npm run build` or `npm run dev`): Sets `base` to `/` for normal Vercel deployment or local dev server.
+
 ## Critical Rules
 
 NEVER:
@@ -115,10 +142,12 @@ NEVER:
 - Modify MCP tool response formats without checking all consumers (CLI, web UI, plugins)
 - Add synchronous file I/O in the ingestion pipeline — it runs parallel workers via Kahn's topological sort
 - Hardcode language-specific logic in shared code — use the extractor/resolver pattern
+- Change `gitnexus-web/` source without rebuilding the package — consumers get stale builds
 
 ALWAYS:
 - Run `npm test` in `gitnexus/` before committing backend changes
 - Run `npm run build` in `gitnexus-web/` before committing frontend changes
+- After changing `gitnexus-web/` source: run `cd gitnexus-web && npm run build:embedded && npm pack` to produce a fresh package
 - Keep the dual-runtime parity — if you add a feature to `gitnexus/src/core/`, check if `gitnexus-web/src/core/` needs the same change (WASM version)
 - Use Tree-sitter queries from `tree-sitter-queries.ts` — don't write raw AST traversals
 - Follow the extractor pattern when adding language support: create `type-extractors/{lang}.ts` + `resolvers/{lang}.ts` + register in `supported-languages.ts`
