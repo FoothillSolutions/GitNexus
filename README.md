@@ -288,7 +288,47 @@ The web UI uses the same indexing pipeline as the CLI but runs entirely in WebAs
 
 **Local Backend Mode:** Run `gitnexus serve` and open the web UI locally — it auto-detects the server and shows all your indexed repos, with full AI chat support. No need to re-upload or re-index. The agent's tools (Cypher queries, search, code navigation) route through the backend HTTP API automatically.
 
-> **New: PR Diff Visualization & Embeddable Package** — See the full feature docs, installation guide, and keyboard shortcuts in the [PR diff visualization branch README](https://github.com/FoothillSolutions/GitNexus/blob/feat/pr-diff-visualization/README.md#pr-diff-visualization).
+### PR Diff Visualization
+
+The web UI includes a graph-annotated diff viewer for reviewing code changes between branches:
+
+- **Graph-annotated diffs** — Changed symbols highlighted amber on the knowledge graph, affected execution flows traced, risk assessed
+- **Node sizing** — Nodes scaled by change magnitude (additions + deletions) so heavily changed files stand out instantly
+- **Edge type colors** — Imports (blue), calls (amber), extends/implements (purple), structural (gray)
+- **Bidirectional linking** — Click a graph node to scroll to its diff; click a file in the diff list to zoom the graph to that node
+- **3 view modes** — Focus (full diff panel), Structure (floating stats on graph), Review (side-by-side diff + graph)
+- **AI summary** — Heuristic risk assessment with per-file intent labels and risk chips
+- **Guided review** — Step-by-step review flow through high-risk changes first
+- **Keyboard shortcuts** — `[`/`]` navigate files, `1`/`2`/`3` switch view modes, `?` shows all shortcuts
+- **File list sorting** — Sort by change size, risk, alphabetical, or directory grouping
+
+To use: connect to a backend server, select two branches in the branch picker, and the diff view loads automatically.
+
+**Auto-diff via URL params:** Pass `?server=localhost:4747&base=main&head=feature-branch` to auto-connect and load the diff without manual branch selection — useful for embedding in other tools.
+
+### Install as Package
+
+`gitnexus-web` can be installed as an npm package for embedding in other projects:
+
+```bash
+# Build and pack
+cd gitnexus-web
+npm install
+npm pack                    # creates gitnexus-web-1.0.0.tgz
+
+# Install in another project
+cd /path/to/your-project
+npm install /path/to/gitnexus-web-1.0.0.tgz
+```
+
+The package includes only the built `dist/` directory. When embedded under a subpath (e.g., `/gitnexus-web/`), build with embedded mode:
+
+```bash
+npm run build:embedded      # builds with base path /gitnexus-web/
+npm pack
+```
+
+Then serve the `node_modules/gitnexus-web/dist/` directory from your backend at `/gitnexus-web/`.
 
 ---
 
@@ -526,6 +566,8 @@ The wiki generator reads the indexed graph structure, groups files into modules 
 
 ### Recently Completed
 
+- [X] PR Diff Visualization — Graph-annotated diffs, node sizing, edge type colors, bidirectional linking, keyboard shortcuts
+- [X] Embeddable Package — `gitnexus-web` installable via `npm pack` for embedding in other tools
 - [X] Constructor-Inferred Type Resolution, `self`/`this` Receiver Mapping
 - [X] Wiki Generation, Multi-File Rename, Git-Diff Impact Analysis
 - [X] Process-Grouped Search, 360-Degree Context, Claude Code Hooks
