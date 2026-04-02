@@ -288,6 +288,8 @@ The web UI uses the same indexing pipeline as the CLI but runs entirely in WebAs
 
 **Local Backend Mode:** Run `gitnexus serve` and open the web UI locally — it auto-detects the server and shows all your indexed repos, with full AI chat support. No need to re-upload or re-index. The agent's tools (Cypher queries, search, code navigation) route through the backend HTTP API automatically.
 
+> **New: PR Diff Visualization & Embeddable Package** — See the full feature docs, installation guide, and keyboard shortcuts in the [PR diff visualization branch README](https://github.com/FoothillSolutions/GitNexus/blob/feat/pr-diff-visualization/README.md#pr-diff-visualization).
+
 ---
 
 ## The Problem GitNexus Solves
@@ -518,7 +520,6 @@ The wiki generator reads the indexed graph structure, groups files into modules 
 
 ### Actively Building
 
-- [ ] **[PR Diff Visualization](https://github.com/FoothillSolutions/GitNexus/pull/2)** — Graph-annotated diffs, node sizing by change magnitude, edge type colors, bidirectional graph-diff linking, keyboard shortcuts, file list sorting, embeddable `gitnexus-web` npm package
 - [ ] **LLM Cluster Enrichment** — Semantic cluster names via LLM API
 - [ ] **AST Decorator Detection** — Parse @Controller, @Get, etc.
 - [ ] **Incremental Indexing** — Only re-index changed files
