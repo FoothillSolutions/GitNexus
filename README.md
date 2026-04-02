@@ -518,6 +518,7 @@ The wiki generator reads the indexed graph structure, groups files into modules 
 
 ### Actively Building
 
+- [ ] **[PR Diff Visualization](https://github.com/FoothillSolutions/GitNexus/pull/2)** — Graph-annotated diffs, node sizing by change magnitude, edge type colors, bidirectional graph-diff linking, keyboard shortcuts, file list sorting, embeddable `gitnexus-web` npm package
 - [ ] **LLM Cluster Enrichment** — Semantic cluster names via LLM API
 - [ ] **AST Decorator Detection** — Parse @Controller, @Get, etc.
 - [ ] **Incremental Indexing** — Only re-index changed files
