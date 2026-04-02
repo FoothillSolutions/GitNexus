@@ -197,7 +197,7 @@ interface FileTreePanelProps {
 export const FileTreePanel = ({ onFocusNode }: FileTreePanelProps) => {
   const { graph, visibleLabels, toggleLabelVisibility, visibleEdgeTypes, toggleEdgeVisibility, selectedNode, setSelectedNode, openCodePanel, depthFilter, setDepthFilter } = useAppState();
 
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set());
   const [activeTab, setActiveTab] = useState<'files' | 'filters'>('files');

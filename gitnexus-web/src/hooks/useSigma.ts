@@ -140,6 +140,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   const diffFocusedRef = useRef<string | null>(null);
   const diffChangeSizeMapRef = useRef<Map<string, number>>(new Map());
   const animatedNodesRef = useRef<Map<string, NodeAnimation>>(new Map());
+  const hoveredNodeRef = useRef<string | null>(null);
   const visibleEdgeTypesRef = useRef<EdgeType[] | null>(null);
   const layoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -457,9 +458,14 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
           }
         }
         
+        // Hovered node always on top
+        if (hoveredNodeRef.current === node) {
+          res.zIndex = 10;
+        }
+
         return res;
       },
-      
+
       edgeReducer: (edge, data) => {
         const res = { ...data };
 
@@ -573,14 +579,18 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     });
 
     sigma.on('enterNode', ({ node }) => {
+      hoveredNodeRef.current = node;
       options.onNodeHover?.(node);
+      sigma.refresh();
       if (containerRef.current) {
         containerRef.current.style.cursor = 'pointer';
       }
     });
 
     sigma.on('leaveNode', () => {
+      hoveredNodeRef.current = null;
       options.onNodeHover?.(null);
+      sigma.refresh();
       if (containerRef.current) {
         containerRef.current.style.cursor = 'grab';
       }
