@@ -8,6 +8,7 @@ import EdgeCurveProgram from '@sigma/edge-curve';
 import { SigmaNodeAttributes, SigmaEdgeAttributes } from '../lib/graph-adapter';
 import type { NodeAnimation } from './useAppState';
 import type { EdgeType } from '../lib/constants';
+import { EDGE_TYPE_COLORS } from '../lib/constants';
 // Helper: Parse hex color to RGB
 const hexToRgb = (hex: string): { r: number; g: number; b: number } => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
@@ -57,6 +58,10 @@ interface UseSigmaOptions {
   blastRadiusNodeIds?: Set<string>;
   animatedNodes?: Map<string, NodeAnimation>;
   visibleEdgeTypes?: EdgeType[];
+  diffNodeIds?: Set<string>;
+  diffFocusedNodeId?: string | null;
+  /** Map from node ID to change size (additions + deletions) for diff mode sizing */
+  diffChangeSizeMap?: Map<string, number>;
 }
 
 interface UseSigmaReturn {
@@ -131,7 +136,11 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   const selectedNodeRef = useRef<string | null>(null);
   const highlightedRef = useRef<Set<string>>(new Set());
   const blastRadiusRef = useRef<Set<string>>(new Set());
+  const diffNodesRef = useRef<Set<string>>(new Set());
+  const diffFocusedRef = useRef<string | null>(null);
+  const diffChangeSizeMapRef = useRef<Map<string, number>>(new Map());
   const animatedNodesRef = useRef<Map<string, NodeAnimation>>(new Map());
+  const hoveredNodeRef = useRef<string | null>(null);
   const visibleEdgeTypesRef = useRef<EdgeType[] | null>(null);
   const layoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const animationFrameRef = useRef<number | null>(null);
@@ -141,10 +150,27 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   useEffect(() => {
     highlightedRef.current = options.highlightedNodeIds || new Set();
     blastRadiusRef.current = options.blastRadiusNodeIds || new Set();
+    diffNodesRef.current = options.diffNodeIds || new Set();
+    diffFocusedRef.current = options.diffFocusedNodeId || null;
+    diffChangeSizeMapRef.current = options.diffChangeSizeMap || new Map();
     animatedNodesRef.current = options.animatedNodes || new Map();
     visibleEdgeTypesRef.current = options.visibleEdgeTypes || null;
     sigmaRef.current?.refresh();
-  }, [options.highlightedNodeIds, options.blastRadiusNodeIds, options.animatedNodes, options.visibleEdgeTypes]);
+  }, [options.highlightedNodeIds, options.blastRadiusNodeIds, options.diffNodeIds, options.diffFocusedNodeId, options.diffChangeSizeMap, options.animatedNodes, options.visibleEdgeTypes]);
+
+  // Step 2: Adjust label density settings when entering/exiting diff mode
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    if (!sigma) return;
+    const isDiffMode = (options.diffNodeIds?.size ?? 0) > 0;
+    if (isDiffMode) {
+      sigma.setSetting('labelGridCellSize', 120);
+      sigma.setSetting('labelRenderedSizeThreshold', 12);
+    } else {
+      sigma.setSetting('labelGridCellSize', 70);
+      sigma.setSetting('labelRenderedSizeThreshold', 8);
+    }
+  }, [options.diffNodeIds]);
 
   // Animation loop for node effects
   useEffect(() => {
@@ -174,20 +200,22 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
   const setSelectedNode = useCallback((nodeId: string | null) => {
     selectedNodeRef.current = nodeId;
     setSelectedNodeState(nodeId);
-    
+
     const sigma = sigmaRef.current;
     if (!sigma) return;
-    
-    // Tiny camera nudge to force edge refresh (workaround for Sigma edge caching)
+
+    // Immediate refresh to re-run nodeReducer with new selection
+    sigma.refresh();
+
+    // Tiny camera nudge to force edge/label cache invalidation
     const camera = sigma.getCamera();
     const currentRatio = camera.ratio;
-    // Imperceptible zoom change that triggers re-render
     camera.animate(
       { ratio: currentRatio * 1.0001 },
       { duration: 50 }
     );
-    
-    sigma.refresh();
+    // Second refresh after animation to ensure labels are fully updated
+    setTimeout(() => sigma.refresh(), 60);
   }, []);
 
   // Initialize Sigma ONCE
@@ -216,18 +244,20 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
       },
       
       // Custom hover renderer - dark background instead of white
+      // Also serves as the selected node glow renderer (Step 8)
       defaultDrawNodeHover: (context, data, settings) => {
         const label = data.label;
         if (!label) return;
-        
+
         const size = settings.labelSize || 11;
         const font = settings.labelFont || 'JetBrains Mono, monospace';
         const weight = settings.labelWeight || '500';
-        
+
         context.font = `${weight} ${size}px ${font}`;
         const textWidth = context.measureText(label).width;
-        
+
         const nodeSize = data.size || 8;
+        const nodeColor = data.color || '#6366f1';
         const x = data.x;
         const y = data.y - nodeSize - 10;
         const paddingX = 8;
@@ -235,30 +265,39 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
         const height = size + paddingY * 2;
         const width = textWidth + paddingX * 2;
         const radius = 4;
-        
+
         // Dark background pill
         context.fillStyle = '#12121c';
         context.beginPath();
         context.roundRect(x - width / 2, y - height / 2, width, height, radius);
         context.fill();
-        
-        // Border matching node color
-        context.strokeStyle = data.color || '#6366f1';
+
+        // Border matching node color - brighter for selected
+        context.strokeStyle = brightenColor(nodeColor, 1.3);
         context.lineWidth = 2;
         context.stroke();
-        
+
         // Label text - light color
         context.fillStyle = '#f5f5f7';
         context.textAlign = 'center';
         context.textBaseline = 'middle';
         context.fillText(label, x, y);
-        
-        // Also draw a subtle glow ring around the node
+
+        // Outer glow ring (semi-transparent, larger)
+        context.beginPath();
+        context.arc(data.x, data.y, nodeSize + 8, 0, Math.PI * 2);
+        context.strokeStyle = nodeColor;
+        context.lineWidth = 2;
+        context.globalAlpha = 0.2;
+        context.stroke();
+        context.globalAlpha = 1;
+
+        // Inner glow ring around the node - brighter border
         context.beginPath();
         context.arc(data.x, data.y, nodeSize + 4, 0, Math.PI * 2);
-        context.strokeStyle = data.color || '#6366f1';
-        context.lineWidth = 2;
-        context.globalAlpha = 0.5;
+        context.strokeStyle = brightenColor(nodeColor, 1.4);
+        context.lineWidth = 2.5;
+        context.globalAlpha = 0.6;
         context.stroke();
         context.globalAlpha = 1;
       },
@@ -270,31 +309,34 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
       
       nodeReducer: (node, data) => {
         const res = { ...data };
-        
+
         if (data.hidden) {
           res.hidden = true;
           return res;
         }
-        
+
         const currentSelected = selectedNodeRef.current;
         const highlighted = highlightedRef.current;
         const blastRadius = blastRadiusRef.current;
+        const diffNodes = diffNodesRef.current;
         const animatedNodes = animatedNodesRef.current;
         const hasHighlights = highlighted.size > 0;
         const hasBlastRadius = blastRadius.size > 0;
+        const hasDiffNodes = diffNodes.size > 0;
         const isQueryHighlighted = highlighted.has(node);
         const isBlastRadiusNode = blastRadius.has(node);
-        
+        const isDiffNode = diffNodes.has(node);
+
         // Apply animation effects FIRST (before other highlighting)
         const animation = animatedNodes.get(node);
         if (animation) {
           const now = Date.now();
           const elapsed = now - animation.startTime;
           const progress = Math.min(elapsed / animation.duration, 1);
-          
+
           // Calculate animation phase (0-1-0-1... oscillation)
           const phase = (Math.sin(progress * Math.PI * 4) + 1) / 2;
-          
+
           if (animation.type === 'pulse') {
             // Cyan pulse for search results
             const sizeMultiplier = 1.5 + phase * 0.8;
@@ -317,10 +359,46 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
             res.zIndex = 5;
             res.highlighted = true;
           }
-          
+
           return res;
         }
-        
+
+        // Diff mode highlighting (amber) with change-magnitude sizing (Step 1)
+        if (hasDiffNodes && !currentSelected) {
+          const changeSizeMap = diffChangeSizeMapRef.current;
+          if (isDiffNode) {
+            res.color = '#f59e0b'; // Amber for changed symbols
+            // Scale size by change magnitude: baseSize * (1 + log2(1 + additions + deletions) * 0.3), capped at 3x
+            const changeSize = changeSizeMap.get(node) || 0;
+            const baseSize = data.size || 8;
+            const sizeMultiplier = changeSize > 0
+              ? Math.min(3, 1 + Math.log2(1 + changeSize) * 0.3)
+              : 1.6;
+            res.size = baseSize * sizeMultiplier;
+            res.zIndex = 3;
+            res.highlighted = true;
+            // Force labels on heavily changed nodes (Step 2)
+            if (changeSize > 50) {
+              res.forceLabel = true;
+            }
+          } else if (isBlastRadiusNode) {
+            res.color = '#ef4444';
+            res.size = (data.size || 8) * 1.4;
+            res.zIndex = 2;
+            res.highlighted = true;
+          } else if (isQueryHighlighted) {
+            res.color = '#06b6d4';
+            res.size = (data.size || 8) * 1.2;
+            res.zIndex = 1;
+            res.highlighted = true;
+          } else {
+            res.color = dimColor(data.color, 0.15);
+            res.size = (data.size || 8) * 0.4;
+            res.zIndex = 0;
+          }
+          return res;
+        }
+
         // Blast radius takes priority (red highlighting)
         if (hasBlastRadius && !currentSelected) {
           if (isBlastRadiusNode) {
@@ -341,7 +419,7 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
           }
           return res;
         }
-        
+
         if (hasHighlights && !currentSelected) {
           if (isQueryHighlighted) {
             res.color = '#06b6d4';
@@ -361,30 +439,36 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
           if (graph) {
             const isSelected = node === currentSelected;
             const isNeighbor = graph.hasEdge(node, currentSelected) || graph.hasEdge(currentSelected, node);
-            
+
             if (isSelected) {
-              res.color = data.color;
+              // Step 8: Enhanced selected node glow - 1.8x size, brighter color
+              res.color = brightenColor(data.color, 1.3);
               res.size = (data.size || 8) * 1.8;
-              res.zIndex = 2;
+              res.zIndex = 3;
               res.highlighted = true;
+              res.forceLabel = true;
             } else if (isNeighbor) {
               res.color = data.color;
               res.size = (data.size || 8) * 1.3;
               res.zIndex = 1;
+              res.forceLabel = true;
             } else {
-              res.color = dimColor(data.color, 0.25);
-              res.size = (data.size || 8) * 0.6;
-              res.zIndex = 0;
+              res.hidden = true;
             }
           }
         }
         
+        // Hovered node always on top
+        if (hoveredNodeRef.current === node) {
+          res.zIndex = 10;
+        }
+
         return res;
       },
-      
+
       edgeReducer: (edge, data) => {
         const res = { ...data };
-        
+
         // Check edge type visibility first
         const visibleTypes = visibleEdgeTypesRef.current;
         if (visibleTypes && data.relationType) {
@@ -393,35 +477,51 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
             return res;
           }
         }
-        
+
         const currentSelected = selectedNodeRef.current;
         const highlighted = highlightedRef.current;
         const blastRadius = blastRadiusRef.current;
-        const hasHighlights = highlighted.size > 0 || blastRadius.size > 0; // Check BOTH sets
-        
+        const diffNodes = diffNodesRef.current;
+        const hasDiffNodes = diffNodes.size > 0;
+        const hasHighlights = highlighted.size > 0 || blastRadius.size > 0 || hasDiffNodes;
+
         if (hasHighlights && !currentSelected) {
           const graph = graphRef.current;
           if (graph) {
             const [source, target] = graph.extremities(edge);
-            
-            // Check if nodes are in EITHER set
-            const isSourceActive = highlighted.has(source) || blastRadius.has(source);
-            const isTargetActive = highlighted.has(target) || blastRadius.has(target);
-            
+
+            // Check if nodes are in ANY active set
+            const isSourceDiff = diffNodes.has(source);
+            const isTargetDiff = diffNodes.has(target);
+            const isSourceActive = highlighted.has(source) || blastRadius.has(source) || isSourceDiff;
+            const isTargetActive = highlighted.has(target) || blastRadius.has(target) || isTargetDiff;
+
             const bothHighlighted = isSourceActive && isTargetActive;
             const oneHighlighted = isSourceActive || isTargetActive;
-            
+
             if (bothHighlighted) {
-              // If both nodes are in blast radius, use red edge
-              if (blastRadius.has(source) && blastRadius.has(target)) {
+              // Color by highest-priority set both ends share
+              if (isSourceDiff && isTargetDiff) {
+                res.color = '#f59e0b'; // Amber for changed-to-changed edges
+              } else if (blastRadius.has(source) && blastRadius.has(target)) {
                 res.color = '#ef4444';
+              } else if (hasDiffNodes && (isSourceDiff || isTargetDiff)) {
+                // Step 3: Use edge type color for edges from changed to non-changed in diff mode
+                const edgeTypeColor = data.relationType ? EDGE_TYPE_COLORS[data.relationType] : null;
+                res.color = edgeTypeColor || '#06b6d4';
               } else {
                 res.color = '#06b6d4';
               }
               res.size = Math.max(2, (data.size || 1) * 3);
               res.zIndex = 2;
             } else if (oneHighlighted) {
-              res.color = dimColor('#06b6d4', 0.4);
+              // Step 3: Use dimmed edge type color when one end is highlighted
+              if (hasDiffNodes && data.relationType) {
+                const edgeTypeColor = EDGE_TYPE_COLORS[data.relationType];
+                res.color = edgeTypeColor ? dimColor(edgeTypeColor, 0.4) : dimColor('#06b6d4', 0.4);
+              } else {
+                res.color = dimColor('#06b6d4', 0.4);
+              }
               res.size = 1;
               res.zIndex = 1;
             } else {
@@ -429,6 +529,15 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
               res.size = 0.2;
               res.zIndex = 0;
             }
+          }
+          return res;
+        }
+
+        // Step 3: In non-highlight mode, apply edge type colors in diff mode
+        if (hasDiffNodes && !currentSelected && data.relationType) {
+          const edgeTypeColor = EDGE_TYPE_COLORS[data.relationType];
+          if (edgeTypeColor) {
+            res.color = edgeTypeColor;
           }
           return res;
         }
@@ -456,6 +565,8 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     });
 
     sigmaRef.current = sigma;
+    // Expose for testing/debugging
+    (window as any).__SIGMA__ = sigma;
 
     sigma.on('clickNode', ({ node }) => {
       setSelectedNode(node);
@@ -468,14 +579,18 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     });
 
     sigma.on('enterNode', ({ node }) => {
+      hoveredNodeRef.current = node;
       options.onNodeHover?.(node);
+      sigma.refresh();
       if (containerRef.current) {
         containerRef.current.style.cursor = 'pointer';
       }
     });
 
     sigma.on('leaveNode', () => {
+      hoveredNodeRef.current = null;
       options.onNodeHover?.(null);
+      sigma.refresh();
       if (containerRef.current) {
         containerRef.current.style.cursor = 'grab';
       }
@@ -560,23 +675,27 @@ export const useSigma = (options: UseSigmaOptions = {}): UseSigmaReturn => {
     const graph = graphRef.current;
     if (!sigma || !graph || !graph.hasNode(nodeId)) return;
 
-    // Skip if already focused on this node (prevents double-click issues)
     const alreadySelected = selectedNodeRef.current === nodeId;
-    
-    // Set selection state directly (without the camera nudge from setSelectedNode)
+
+    // Update selection
     selectedNodeRef.current = nodeId;
     setSelectedNodeState(nodeId);
-    
-    // Only animate camera if selecting a new node
+
+    // Immediate refresh to clear old neighbor labels and set new ones
+    sigma.refresh();
+
+    // Animate camera to new node (keep current zoom or zoom to 0.4, whichever is closer)
     if (!alreadySelected) {
       const nodeAttrs = graph.getNodeAttributes(nodeId);
+      const currentRatio = sigma.getCamera().ratio;
+      const targetRatio = Math.min(currentRatio, 0.4);
       sigma.getCamera().animate(
-        { x: nodeAttrs.x, y: nodeAttrs.y, ratio: 0.15 },
+        { x: nodeAttrs.x, y: nodeAttrs.y, ratio: targetRatio },
         { duration: 400 }
       );
     }
-    
-    sigma.refresh();
+    // Post-animation refresh to ensure labels are fully updated
+    setTimeout(() => sigma.refresh(), 420);
   }, []);
 
   const zoomIn = useCallback(() => {

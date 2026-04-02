@@ -1,8 +1,8 @@
-import { useEffect, useCallback, useMemo, useState, forwardRef, useImperativeHandle } from 'react';
+import { useEffect, useCallback, useMemo, useState, useRef, forwardRef, useImperativeHandle } from 'react';
 import { ZoomIn, ZoomOut, Maximize2, Focus, RotateCcw, Play, Pause, Lightbulb, LightbulbOff } from 'lucide-react';
 import { useSigma } from '../hooks/useSigma';
 import { useAppState } from '../hooks/useAppState';
-import { knowledgeGraphToGraphology, filterGraphByDepth, SigmaNodeAttributes, SigmaEdgeAttributes } from '../lib/graph-adapter';
+import { knowledgeGraphToGraphology, filterGraphByDepth, getNodesWithinHops, SigmaNodeAttributes, SigmaEdgeAttributes } from '../lib/graph-adapter';
 import { QueryFAB } from './QueryFAB';
 import Graph from 'graphology';
 
@@ -27,8 +27,48 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     isAIHighlightsEnabled,
     toggleAIHighlights,
     animatedNodes,
+    isDiffMode,
+    diffChangedNodeIds,
+    diffData,
+    setSelectedDiffFile,
+    diffFocusedSymbolId,
+    setDiffFocusedSymbolId,
+    diffGraphFilter,
+    diffGraphDepth,
+    setDiffGraphFilter,
+    setDiffGraphDepth,
   } = useAppState();
   const [hoveredNodeName, setHoveredNodeName] = useState<string | null>(null);
+
+  // Diff mode nodes (amber highlighting)
+  const effectiveDiffNodeIds = useMemo(() => {
+    if (!isDiffMode) return new Set<string>();
+    return diffChangedNodeIds;
+  }, [isDiffMode, diffChangedNodeIds]);
+
+  // Step 1: Build change size map for diff node sizing
+  const diffChangeSizeMap = useMemo(() => {
+    if (!isDiffMode || !diffData || !graph) return new Map<string, number>();
+    const sizeMap = new Map<string, number>();
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+    for (const file of diffData.files) {
+      const changeSize = file.additions + file.deletions;
+      // Map symbol IDs to change size
+      for (const sym of file.symbols) {
+        sizeMap.set(sym.id, changeSize);
+      }
+      // Map file nodes by path
+      const fp = norm(file.filePath);
+      for (const node of graph.nodes) {
+        if (node.label === 'File' && norm(node.properties.filePath) === fp) {
+          sizeMap.set(node.id, changeSize);
+        }
+      }
+      // Map injected diff file nodes
+      sizeMap.set(`diff_file_${fp}`, changeSize);
+    }
+    return sizeMap;
+  }, [isDiffMode, diffData, graph]);
 
   const effectiveHighlightedNodeIds = useMemo(() => {
     if (!isAIHighlightsEnabled) return highlightedNodeIds;
@@ -53,12 +93,47 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
 
   const handleNodeClick = useCallback((nodeId: string) => {
     if (!graph) return;
-    const node = graph.nodes.find(n => n.id === nodeId);
-    if (node) {
-      setSelectedNode(node);
-      openCodePanel();
+
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+
+    // Handle injected diff file nodes (not in knowledge graph)
+    if (isDiffMode && diffData && nodeId.startsWith('diff_file_')) {
+      const filePath = nodeId.replace('diff_file_', '').replace(/\\/g, '/');
+      const targetFile = diffData.files.find(f => norm(f.filePath) === filePath);
+      if (targetFile) {
+        setSelectedDiffFile(targetFile.filePath);
+        setDiffFocusedSymbolId(nodeId);
+      }
+      return;
     }
-  }, [graph, setSelectedNode, openCodePanel]);
+
+    const node = graph.nodes.find(n => n.id === nodeId);
+    if (!node) return;
+
+    // Graph → Diff: if in diff mode, navigate to the file for this node
+    if (isDiffMode && diffData) {
+      // Match by symbol ID
+      let targetFile = diffData.files.find(f =>
+        f.symbols.some(s => s.id === nodeId)
+      );
+      // Match File nodes by path (exact, suffix, filename)
+      if (!targetFile && node.label === 'File' && node.properties.filePath) {
+        const nodePath = norm(node.properties.filePath);
+        const nodeName = nodePath.split('/').pop() || '';
+        targetFile = diffData.files.find(f => norm(f.filePath) === nodePath)
+          || diffData.files.find(f => norm(f.filePath).endsWith(nodePath) || nodePath.endsWith(norm(f.filePath)))
+          || diffData.files.find(f => norm(f.filePath).split('/').pop() === nodeName);
+      }
+      if (targetFile) {
+        setSelectedDiffFile(targetFile.filePath);
+        setDiffFocusedSymbolId(nodeId);
+        return;
+      }
+    }
+
+    setSelectedNode(node);
+    openCodePanel();
+  }, [graph, setSelectedNode, openCodePanel, isDiffMode, diffData, setSelectedDiffFile, setDiffFocusedSymbolId]);
 
   const handleNodeHover = useCallback((nodeId: string | null) => {
     if (!nodeId || !graph) {
@@ -96,17 +171,22 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     blastRadiusNodeIds: effectiveBlastRadiusNodeIds,
     animatedNodes: effectiveAnimatedNodes,
     visibleEdgeTypes,
+    diffNodeIds: effectiveDiffNodeIds,
+    diffFocusedNodeId: diffFocusedSymbolId,
+    diffChangeSizeMap,
   });
 
   // Expose focusNode to parent via ref
   useImperativeHandle(ref, () => ({
     focusNode: (nodeId: string) => {
-      // Also update app state so the selection syncs properly
       if (graph) {
         const node = graph.nodes.find(n => n.id === nodeId);
         if (node) {
           setSelectedNode(node);
           openCodePanel();
+        } else {
+          // Injected diff node — clear app selection so stale state doesn't interfere
+          setSelectedNode(null);
         }
       }
       focusNode(nodeId);
@@ -136,26 +216,128 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
     setSigmaGraph(sigmaGraph);
   }, [graph, setSigmaGraph]);
 
-  // Update node visibility when filters change
+  // Update node visibility when filters change (skip in diff mode — diff filter owns visibility)
   useEffect(() => {
+    if (isDiffMode) return;
     const sigma = sigmaRef.current;
     if (!sigma) return;
 
     const sigmaGraph = sigma.getGraph() as Graph<SigmaNodeAttributes, SigmaEdgeAttributes>;
-    if (sigmaGraph.order === 0) return; // Don't filter empty graph
+    if (sigmaGraph.order === 0) return;
 
     filterGraphByDepth(sigmaGraph, appSelectedNode?.id || null, depthFilter, visibleLabels);
     sigma.refresh();
-  }, [visibleLabels, depthFilter, appSelectedNode, sigmaRef]);
+  }, [isDiffMode, visibleLabels, depthFilter, appSelectedNode, sigmaRef]);
 
-  // Sync app selected node with sigma
+  // Track injected diff nodes so we can clean them up
+  const injectedDiffNodesRef = useRef<Set<string>>(new Set());
+
+  // Diff mode: hide non-impacted nodes when filter is 'impacted',
+  // and inject temporary File nodes for diff files missing from the graph
+  useEffect(() => {
+    const sigma = sigmaRef.current;
+    if (!sigma) return;
+    const sigmaGraph = sigma.getGraph() as Graph<SigmaNodeAttributes, SigmaEdgeAttributes>;
+    if (sigmaGraph.order === 0 && !isDiffMode) return;
+
+    // Clean up previously injected nodes
+    for (const id of injectedDiffNodesRef.current) {
+      if (sigmaGraph.hasNode(id)) sigmaGraph.dropNode(id);
+    }
+    injectedDiffNodesRef.current.clear();
+
+    // Inject missing diff file nodes into the sigma graph
+    if (isDiffMode && diffData) {
+      const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+      // Build set of file paths already in sigma graph
+      const existingPaths = new Set<string>();
+      sigmaGraph.forEachNode((_, attrs) => {
+        if (attrs.nodeType === 'File' && attrs.filePath) {
+          existingPaths.add(norm(attrs.filePath));
+        }
+      });
+
+      // Spread new nodes around center
+      let angle = 0;
+      const radius = 50;
+      for (const file of diffData.files) {
+        const fp = norm(file.filePath);
+        const fileName = file.filePath.split('/').pop() || file.filePath;
+        // Check if any existing node matches this file
+        const hasMatch = existingPaths.has(fp)
+          || [...existingPaths].some(ep => ep.endsWith(fp) || fp.endsWith(ep))
+          || [...existingPaths].some(ep => ep.split('/').pop() === fp.split('/').pop());
+        if (!hasMatch) {
+          const nodeId = `diff_file_${fp}`;
+          if (!sigmaGraph.hasNode(nodeId)) {
+            sigmaGraph.addNode(nodeId, {
+              x: Math.cos(angle) * radius + (Math.random() - 0.5) * 20,
+              y: Math.sin(angle) * radius + (Math.random() - 0.5) * 20,
+              size: 6,
+              color: '#f59e0b',
+              label: fileName,
+              nodeType: 'File' as any,
+              filePath: file.filePath,
+              hidden: false,
+            });
+            injectedDiffNodesRef.current.add(nodeId);
+            angle += (Math.PI * 2) / Math.max(diffData.files.length, 1);
+          }
+        }
+      }
+    }
+
+    const allDiffIds = new Set([...diffChangedNodeIds, ...injectedDiffNodesRef.current]);
+
+    if (isDiffMode && diffGraphFilter === 'impacted' && allDiffIds.size > 0) {
+      // Build full set of visible node IDs: changed + injected + optional neighbors
+      const visibleNodes = new Set<string>();
+      for (const nodeId of allDiffIds) {
+        if (sigmaGraph.hasNode(nodeId)) {
+          if (diffGraphDepth === 0) {
+            visibleNodes.add(nodeId);
+          } else {
+            const reachable = getNodesWithinHops(sigmaGraph, nodeId, diffGraphDepth);
+            for (const id of reachable) visibleNodes.add(id);
+          }
+        }
+      }
+      sigmaGraph.forEachNode((nodeId, attrs) => {
+        const isLabelVisible = visibleLabels.includes(attrs.nodeType);
+        sigmaGraph.setNodeAttribute(nodeId, 'hidden', !visibleNodes.has(nodeId) || !isLabelVisible);
+      });
+    } else if (isDiffMode && diffGraphFilter === 'all') {
+      sigmaGraph.forEachNode((nodeId, attrs) => {
+        const isLabelVisible = visibleLabels.includes(attrs.nodeType);
+        sigmaGraph.setNodeAttribute(nodeId, 'hidden', !isLabelVisible);
+      });
+    }
+    sigma.refresh();
+  }, [isDiffMode, diffData, diffGraphFilter, diffGraphDepth, diffChangedNodeIds, visibleLabels, sigmaRef]);
+
+  // Sync app selected node with sigma (skip null sync in diff mode — focusNode drives selection)
   useEffect(() => {
     if (appSelectedNode) {
       setSigmaSelectedNode(appSelectedNode.id);
-    } else {
+    } else if (!isDiffMode) {
       setSigmaSelectedNode(null);
     }
-  }, [appSelectedNode, setSigmaSelectedNode]);
+  }, [appSelectedNode, setSigmaSelectedNode, isDiffMode]);
+
+  // Step 4: Animate camera to focused diff node (Diff→Graph linking)
+  useEffect(() => {
+    if (!isDiffMode || !diffFocusedSymbolId) return;
+    const sigma = sigmaRef.current;
+    if (!sigma) return;
+    const sigmaGraph = sigma.getGraph();
+    if (!sigmaGraph.hasNode(diffFocusedSymbolId)) return;
+    const attrs = sigmaGraph.getNodeAttributes(diffFocusedSymbolId);
+    const currentRatio = sigma.getCamera().ratio;
+    sigma.getCamera().animate(
+      { x: attrs.x, y: attrs.y, ratio: Math.min(currentRatio, 0.4) },
+      { duration: 400 }
+    );
+  }, [isDiffMode, diffFocusedSymbolId, sigmaRef]);
 
   // Focus on selected node
   const handleFocusSelected = useCallback(() => {
@@ -321,6 +503,53 @@ export const GraphCanvas = forwardRef<GraphCanvasHandle>((_, ref) => {
           {isAIHighlightsEnabled ? <Lightbulb className="w-4 h-4" /> : <LightbulbOff className="w-4 h-4" />}
         </button>
       </div>
+
+      {/* Diff Mode: Centered banner when showing impacted only */}
+      {isDiffMode && diffGraphFilter === 'impacted' && (
+        <div className="absolute top-4 left-1/2 -translate-x-1/2 flex items-center gap-3 px-4 py-2 bg-amber-500/15 border border-amber-500/30 rounded-xl backdrop-blur-sm z-20 animate-fade-in">
+          <div className="w-2 h-2 bg-amber-400 rounded-full" />
+          <span className="text-xs text-amber-300 font-medium">Showing impacted nodes only</span>
+          <button
+            onClick={() => setDiffGraphFilter('all')}
+            className="px-2.5 py-1 bg-amber-500/20 border border-amber-500/30 rounded-md text-xs font-medium text-amber-200 hover:bg-amber-500/30 transition-colors"
+          >
+            Show All Nodes
+          </button>
+        </div>
+      )}
+
+      {/* Diff Mode Graph Controls */}
+      {isDiffMode && (
+        <div className="absolute top-16 right-4 z-20 flex flex-col gap-1.5 animate-fade-in">
+          {/* Only Impacted toggle */}
+          <button
+            onClick={() => setDiffGraphFilter(diffGraphFilter === 'all' ? 'impacted' : 'all')}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium border transition-colors ${
+              diffGraphFilter === 'impacted'
+                ? 'bg-amber-500/20 border-amber-500/30 text-amber-300'
+                : 'bg-elevated border-border-subtle text-text-muted hover:text-text-secondary'
+            }`}
+          >
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="16" y="2" width="6" height="6" rx="1"/><rect x="9" y="12" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/></svg>
+            {diffGraphFilter === 'impacted' ? 'Show All Nodes' : 'Only Impacted'}
+          </button>
+
+          {/* Depth slider */}
+          {diffGraphFilter === 'impacted' && (
+            <div className="px-3 py-2 bg-elevated border border-border-subtle rounded-lg">
+              <div className="text-[10px] text-text-muted mb-1">{diffGraphDepth === 0 ? 'Changed only' : `Depth: ${diffGraphDepth} hop${diffGraphDepth > 1 ? 's' : ''}`}</div>
+              <input
+                type="range"
+                min={0}
+                max={3}
+                value={diffGraphDepth}
+                onChange={e => setDiffGraphDepth(Number(e.target.value))}
+                className="w-full h-1 accent-amber-500"
+              />
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 });

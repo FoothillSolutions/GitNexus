@@ -400,6 +400,32 @@ export const createServer = async (port: number, host: string = '127.0.0.1') => 
     }
   });
 
+  // Structured diff between two refs with graph-annotated symbols
+  app.post('/api/diff', async (req, res) => {
+    try {
+      const base = (req.body.base ?? '').trim();
+      if (!base) {
+        res.status(400).json({ error: 'Missing "base" in request body' });
+        return;
+      }
+      const head = typeof req.body.head === 'string' ? req.body.head.trim() : undefined;
+      const result = await backend.queryDiff({ base, head }, requestedRepo(req));
+      res.json(result);
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message || 'Diff failed' });
+    }
+  });
+
+  // List available branches and tags
+  app.get('/api/branches', async (req, res) => {
+    try {
+      const result = await backend.queryBranches(requestedRepo(req));
+      res.json(result);
+    } catch (err: any) {
+      res.status(statusFromError(err)).json({ error: err.message || 'Failed to list branches' });
+    }
+  });
+
   // Global error handler — catch anything the route handlers miss
   app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
     console.error('Unhandled error:', err);

@@ -1,101 +1,242 @@
-<!-- gitnexus:start -->
-# GitNexus — Code Intelligence
+# GitNexus
 
-This project is indexed by GitNexus as **GitNexus** (2273 symbols, 5419 relationships, 174 execution flows). Use the GitNexus MCP tools to understand code, assess impact, and navigate safely.
+Graph-powered code intelligence platform. Builds a knowledge graph of any codebase and exposes it through MCP tools, CLI, and a web UI for AI agents and developers to understand, analyze, and navigate code.
 
-> If any GitNexus tool warns the index is stale, run `npx gitnexus analyze` in terminal first.
+## Architecture
 
-## Always Do
-
-- **MUST run impact analysis before editing any symbol.** Before modifying a function, class, or method, run `gitnexus_impact({target: "symbolName", direction: "upstream"})` and report the blast radius (direct callers, affected processes, risk level) to the user.
-- **MUST run `gitnexus_detect_changes()` before committing** to verify your changes only affect expected symbols and execution flows.
-- **MUST warn the user** if impact analysis returns HIGH or CRITICAL risk before proceeding with edits.
-- When exploring unfamiliar code, use `gitnexus_query({query: "concept"})` to find execution flows instead of grepping. It returns process-grouped results ranked by relevance.
-- When you need full context on a specific symbol — callers, callees, which execution flows it participates in — use `gitnexus_context({name: "symbolName"})`.
-
-## When Debugging
-
-1. `gitnexus_query({query: "<error or symptom>"})` — find execution flows related to the issue
-2. `gitnexus_context({name: "<suspect function>"})` — see all callers, callees, and process participation
-3. `READ gitnexus://repo/GitNexus/process/{processName}` — trace the full execution flow step by step
-4. For regressions: `gitnexus_detect_changes({scope: "compare", base_ref: "main"})` — see what your branch changed
-
-## When Refactoring
-
-- **Renaming**: MUST use `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` first. Review the preview — graph edits are safe, text_search edits need manual review. Then run with `dry_run: false`.
-- **Extracting/Splitting**: MUST run `gitnexus_context({name: "target"})` to see all incoming/outgoing refs, then `gitnexus_impact({target: "target", direction: "upstream"})` to find all external callers before moving code.
-- After any refactor: run `gitnexus_detect_changes({scope: "all"})` to verify only expected files changed.
-
-## Never Do
-
-- NEVER edit a function, class, or method without first running `gitnexus_impact` on it.
-- NEVER ignore HIGH or CRITICAL risk warnings from impact analysis.
-- NEVER rename symbols with find-and-replace — use `gitnexus_rename` which understands the call graph.
-- NEVER commit changes without running `gitnexus_detect_changes()` to check affected scope.
-
-## Tools Quick Reference
-
-| Tool | When to use | Command |
-|------|-------------|---------|
-| `query` | Find code by concept | `gitnexus_query({query: "auth validation"})` |
-| `context` | 360-degree view of one symbol | `gitnexus_context({name: "validateUser"})` |
-| `impact` | Blast radius before editing | `gitnexus_impact({target: "X", direction: "upstream"})` |
-| `detect_changes` | Pre-commit scope check | `gitnexus_detect_changes({scope: "staged"})` |
-| `rename` | Safe multi-file rename | `gitnexus_rename({symbol_name: "old", new_name: "new", dry_run: true})` |
-| `cypher` | Custom graph queries | `gitnexus_cypher({query: "MATCH ..."})` |
-
-## Impact Risk Levels
-
-| Depth | Meaning | Action |
-|-------|---------|--------|
-| d=1 | WILL BREAK — direct callers/importers | MUST update these |
-| d=2 | LIKELY AFFECTED — indirect deps | Should test |
-| d=3 | MAY NEED TESTING — transitive | Test if critical path |
-
-## Resources
-
-| Resource | Use for |
-|----------|---------|
-| `gitnexus://repo/GitNexus/context` | Codebase overview, check index freshness |
-| `gitnexus://repo/GitNexus/clusters` | All functional areas |
-| `gitnexus://repo/GitNexus/processes` | All execution flows |
-| `gitnexus://repo/GitNexus/process/{name}` | Step-by-step execution trace |
-
-## Self-Check Before Finishing
-
-Before completing any code modification task, verify:
-1. `gitnexus_impact` was run for all modified symbols
-2. No HIGH/CRITICAL risk warnings were ignored
-3. `gitnexus_detect_changes()` confirms changes match expected scope
-4. All d=1 (WILL BREAK) dependents were updated
-
-## Keeping the Index Fresh
-
-After committing code changes, the GitNexus index becomes stale. Re-run analyze to update it:
-
-```bash
-npx gitnexus analyze
+```
+gitnexus/          CLI + MCP server + HTTP API (Node.js/TypeScript)
+gitnexus-web/      Web UI — graph visualization + diff viewer (React/Vite)
+gitnexus-claude-plugin/   Claude Code MCP hooks & skills
+gitnexus-cursor-integration/  Cursor editor integration
+eval/              SWE-bench evaluation framework (Python)
 ```
 
-If the index previously included embeddings, preserve them by adding `--embeddings`:
+The three runtimes:
+- **CLI** (`gitnexus analyze/serve/mcp/...`) — indexes repos, serves API, runs MCP
+- **Web UI** (`gitnexus-web/`) — connects to CLI's HTTP server OR runs standalone with WASM
+- **MCP server** (`gitnexus mcp`) — exposes tools to AI editors via stdio
+
+Data flow: `gitnexus analyze` → Tree-sitter AST → knowledge graph in LadybugDB → `.gitnexus/` directory → queried by MCP/CLI/Web
+
+## Monorepo Structure
+
+Each package has its own `package.json` and builds independently. No workspace manager — just `cd` into the directory and `npm install`.
+
+### Backend (`gitnexus/`)
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/cli/` | Commander.js CLI commands (analyze, serve, mcp, wiki, setup, clean, tool) |
+| `src/core/ingestion/` | 6-phase indexing pipeline — structure, parsing, resolution, clustering, processes, search |
+| `src/core/ingestion/type-extractors/` | Language-specific AST extractors (13 languages, 20-40KB each) |
+| `src/core/ingestion/resolvers/` | Language-specific import resolution |
+| `src/core/tree-sitter/` | Tree-sitter parser loader (lazy, 13 grammars) |
+| `src/core/lbug/` | LadybugDB graph database adapter |
+| `src/core/search/` | BM25 + semantic hybrid search with RRF ranking |
+| `src/core/embeddings/` | HuggingFace Transformers.js embeddings |
+| `src/mcp/` | MCP server — tools, resources, staleness detection |
+| `src/mcp/local/` | Multi-repo backend — `local-backend.ts` (query engine), `tools.ts` (64KB, all tool logic) |
+| `src/server/` | Express HTTP API for web UI connection |
+| `src/storage/` | Repository registry + git integration |
+
+Key files:
+- `src/core/ingestion/pipeline.ts` — main indexing orchestrator (Kahn's topological sort for parallel processing)
+- `src/mcp/local/tools.ts` — all MCP tool implementations (impact, rename, detect_changes, etc.)
+- `src/server/api.ts` — HTTP endpoints including `/api/diff` and `/api/branches`
+
+### Frontend (`gitnexus-web/`)
+
+| Directory | Purpose |
+|-----------|---------|
+| `src/components/` | React components — GraphCanvas (Sigma.js/WebGL), DiffPanel, Header, FileTree, etc. |
+| `src/components/diff/` | Diff viewer — file list, hunk view, split view, minimap, AI summary, guided review |
+| `src/hooks/` | State management — `useAppState.tsx` is the central state hook |
+| `src/core/` | Browser-side ingestion pipeline (WASM versions of backend modules) |
+| `src/core/llm/` | LLM integration — LangGraph agent, multi-provider support |
+| `src/services/` | API clients — `backend.ts` (REST), `server-connection.ts` (auto-detect) |
+| `src/lib/` | Utilities — `diff-utils.ts` (classification, word-diff, risk chips) |
+
+Key files:
+- `src/App.tsx` — root component, auto-connect via `?server` param, auto-diff via `?base&head`
+- `src/hooks/useAppState.tsx` — all app state + actions (1400+ lines)
+- `src/components/GraphCanvas.tsx` — Sigma.js WebGL graph rendering with diff highlighting
+
+## Supported Languages
+
+TypeScript, JavaScript, Python, Java, Kotlin, C#, Go, Rust, PHP, Ruby, C, C++, Swift
+
+Each language has a type extractor in `src/core/ingestion/type-extractors/` and an import resolver in `src/core/ingestion/resolvers/`.
+
+## Knowledge Graph Schema
+
+**Nodes**: File, Folder, Function, Class, Interface, Method, CodeElement, Community, Process, Struct, Enum, Trait, Impl, Module, Namespace, and more
+
+**Relations**: CALLS, IMPORTS, EXTENDS, IMPLEMENTS, HAS_METHOD, HAS_PROPERTY, OVERRIDES, ACCESSES, CONTAINS, MEMBER_OF
+
+**Confidence**: CALLS/IMPORTS 0.9, HAS_METHOD/PROPERTY 0.95, EXTENDS/IMPLEMENTS 0.85, ACCESSES 0.8
+
+## Commands
 
 ```bash
-npx gitnexus analyze --embeddings
+# Backend
+cd gitnexus
+npm install
+npm run build          # TypeScript → dist/
+npm run dev            # tsx watch mode
+npm test               # Vitest (all tests)
+npm run test:unit      # Unit tests only
+npm run test:integration  # Integration tests only
+npm run test:coverage  # Coverage report
+
+# Frontend
+cd gitnexus-web
+npm install
+npm run dev            # Vite dev server (hot reload)
+npm run build          # tsc + vite build
+npm run preview        # Serve production build
+
+# CLI usage
+gitnexus analyze [path]     # Index a repository
+gitnexus serve              # HTTP server for web UI (default port 4747)
+gitnexus mcp                # Start MCP server (stdio)
+gitnexus setup              # Configure MCP for editors
+gitnexus status             # Show index stats
+gitnexus clean              # Delete index
+gitnexus wiki [path]        # Generate LLM-powered wiki
 ```
 
-To check whether embeddings exist, inspect `.gitnexus/meta.json` — the `stats.embeddings` field shows the count (0 means no embeddings). **Running analyze without `--embeddings` will delete any previously generated embeddings.**
+## gitnexus-web Package
 
-> Claude Code users: A PostToolUse hook handles this automatically after `git commit` and `git merge`.
+`gitnexus-web` is a distributable npm package. Other projects (e.g., agent_playground) install it to embed the GitNexus web UI.
 
-## CLI
+**Package config** (`gitnexus-web/package.json`):
+- `"name": "gitnexus-web"` — the installable package name
+- `"files": ["dist"]` — only the built dist ships
+- `"prepack"` runs `build:embedded` automatically before `npm pack`
+- `"build:embedded"` builds with `--mode embedded` which sets `base: '/gitnexus-web/'` for subpath serving
 
-| Task | Read this skill file |
-|------|---------------------|
-| Understand architecture / "How does X work?" | `.claude/skills/gitnexus/gitnexus-exploring/SKILL.md` |
-| Blast radius / "What breaks if I change X?" | `.claude/skills/gitnexus/gitnexus-impact-analysis/SKILL.md` |
-| Trace bugs / "Why is X failing?" | `.claude/skills/gitnexus/gitnexus-debugging/SKILL.md` |
-| Rename / extract / split / refactor | `.claude/skills/gitnexus/gitnexus-refactoring/SKILL.md` |
-| Tools, resources, schema reference | `.claude/skills/gitnexus/gitnexus-guide/SKILL.md` |
-| Index, status, clean, wiki CLI commands | `.claude/skills/gitnexus/gitnexus-cli/SKILL.md` |
+**After any change to `gitnexus-web/`**, you MUST rebuild and repack the package:
+```bash
+cd gitnexus-web
+npm run build:embedded    # build with /gitnexus-web/ base path
+npm pack                  # creates gitnexus-web-1.0.0.tgz
+```
 
-<!-- gitnexus:end -->
+Then reinstall in consuming projects:
+```bash
+cd /path/to/agent_playground
+npm install /path/to/GitNexus/gitnexus-web/gitnexus-web-1.0.0.tgz
+```
+
+**Embedded mode** (`--mode embedded`): Sets Vite `base` to `/gitnexus-web/` so all asset paths are prefixed. This is required when the app is served under a subpath (e.g., `http://localhost:9000/gitnexus-web/`). Without it, assets resolve to `/assets/...` which 404s under subpath mounting.
+
+**Standalone mode** (default `npm run build` or `npm run dev`): Sets `base` to `/` for normal Vercel deployment or local dev server.
+
+## Critical Rules
+
+NEVER:
+- Edit a type extractor without running its test suite — extractors are 20-40KB each and tightly coupled to Tree-sitter queries
+- Modify `pipeline.ts` phases without understanding the dependency order — phase 3 (resolution) depends on phase 2 (parsing), phase 5 (processes) depends on phase 4 (clustering)
+- Change the LadybugDB schema without a migration — existing indexes will break
+- Modify MCP tool response formats without checking all consumers (CLI, web UI, plugins)
+- Add synchronous file I/O in the ingestion pipeline — it runs parallel workers via Kahn's topological sort
+- Hardcode language-specific logic in shared code — use the extractor/resolver pattern
+- Change `gitnexus-web/` source without rebuilding the package — consumers get stale builds
+
+ALWAYS:
+- Run `npm test` in `gitnexus/` before committing backend changes
+- Run `npm run build` in `gitnexus-web/` before committing frontend changes
+- After changing `gitnexus-web/` source: run `cd gitnexus-web && npm run build:embedded && npm pack` to produce a fresh package
+- Keep the dual-runtime parity — if you add a feature to `gitnexus/src/core/`, check if `gitnexus-web/src/core/` needs the same change (WASM version)
+- Use Tree-sitter queries from `tree-sitter-queries.ts` — don't write raw AST traversals
+- Follow the extractor pattern when adding language support: create `type-extractors/{lang}.ts` + `resolvers/{lang}.ts` + register in `supported-languages.ts`
+- Keep MCP tool responses under 50KB — truncate with `... (truncated)` hints
+
+## Code Patterns
+
+### Adding a new MCP tool
+1. Define the tool schema in `src/mcp/tools.ts`
+2. Implement the logic in `src/mcp/local/tools.ts`
+3. Register the handler in `src/mcp/server.ts`
+4. Add next-step hints so agents know what to do after calling the tool
+
+### Adding a new language
+1. Add the language to `src/config/supported-languages.ts`
+2. Create `src/core/ingestion/type-extractors/{lang}.ts` extending the shared base
+3. Create `src/core/ingestion/resolvers/{lang}.ts` implementing import resolution
+4. Add Tree-sitter queries to `tree-sitter-queries.ts`
+5. Add parser grammar to dependencies
+6. Write tests in `test/unit/` covering symbol extraction, imports, and calls
+
+### Web UI state management
+- All state lives in `useAppState.tsx` — don't create separate stores
+- `commitServerConnection()` builds the graph and transitions to exploring view
+- `pendingServerResult` holds server data between connect and commit phases
+- `startDiff(base, head)` triggers diff mode — calls `/api/diff` on the backend
+
+## Indexing Pipeline
+
+6 phases, executed in dependency order via Kahn's topological sort:
+
+1. **Structure** — walk filesystem, build file/folder tree (respects `.gitignore`, `.gitnexusignore`)
+2. **Parsing** — Tree-sitter AST extraction, symbol table construction (parallel by dependency level)
+3. **Resolution** — resolve imports, function calls, inheritance chains, MRO computation
+4. **Clustering** — Leiden community detection to identify functional areas
+5. **Processes** — trace execution flows from entry points (main, routes, handlers, tests)
+6. **Search** — build BM25 full-text index + optional semantic embeddings
+
+Performance: chunk-based parsing (20MB per chunk), AST LRU cache (50 trees), LadybugDB connection pool (5 concurrent, 5-min timeout).
+
+## Storage
+
+- **Per-repo**: `.gitnexus/` directory (gitignored) — `meta.json`, `*.lbug`, `fts.json`, `vectors.json`
+- **Global**: `~/.gitnexus/registry.json` (indexed repo paths), `~/.gitnexus/config.json` (settings)
+
+## Testing
+
+Backend tests are in `gitnexus/test/`:
+- `test/unit/` — 62 test files covering extractors, resolvers, call routing, search, tools
+- `test/integration/` — 28 test files for pipeline, MCP, server
+- `test/fixtures/` — sample code in 8 languages
+- Runner: Vitest
+
+Frontend E2E tests are in `gitnexus-web/e2e/`:
+- `diff-ux.spec.ts` — diff panel UX (collapse, shortcuts, depth slider)
+- `diff-visualization.spec.ts` — backend API + frontend diff flow
+- Runner: Playwright
+
+## Web UI Connection Modes
+
+1. **Server mode**: `gitnexus serve` runs locally, web UI connects via `?server=localhost:4747`
+2. **Upload mode**: drag-and-drop a zip file, web UI processes it entirely in-browser (WASM)
+3. **Auto-diff**: `?server=X&base=main&head=feature` auto-connects and opens diff view
+
+## Deployment
+
+- **Web UI**: Vercel (`gitnexus.vercel.app`)
+- **CLI/MCP**: npm package (`npm install -g gitnexus`)
+- **Plugins**: Installed via `gitnexus setup` which auto-configures MCP for Claude Code, Cursor, OpenCode, Codex
+
+## MCP Tools
+
+| Tool | Purpose |
+|------|---------|
+| `list_repos` | Discover indexed repositories |
+| `query` | Process-grouped hybrid search (BM25 + semantic + RRF) |
+| `context` | 360-degree symbol view — callers, callees, process participation |
+| `impact` | Blast radius analysis with depth grouping (d=1 WILL BREAK, d=2 LIKELY, d=3 MAY) |
+| `detect_changes` | Git-diff scope check — what symbols and flows changed |
+| `rename` | Graph-aware multi-file rename (dry_run first) |
+| `cypher` | Raw Cypher queries against the knowledge graph |
+
+## MCP Resources
+
+```
+gitnexus://repos                          List all indexed repos
+gitnexus://repo/{name}/context            Codebase stats, index freshness
+gitnexus://repo/{name}/clusters           Functional areas (Leiden communities)
+gitnexus://repo/{name}/processes          All execution flows
+gitnexus://repo/{name}/process/{name}     Step-by-step execution trace
+gitnexus://repo/{name}/schema             Graph schema for Cypher queries
+```

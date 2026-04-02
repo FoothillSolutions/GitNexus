@@ -228,3 +228,37 @@ export const fetchClusterDetail = async (
   await assertOk(response);
   return response.json();
 };
+
+// ── Diff Visualization ────────────────────────────────────────────────────
+
+import type { DiffResult, BranchesResult } from '../types/diff';
+
+/**
+ * Fetch available branches and tags for a repository.
+ */
+export const fetchBranches = async (
+  repo: string,
+): Promise<BranchesResult> => {
+  const response = await fetchWithTimeout(
+    `${backendUrl}/api/branches?repo=${encodeURIComponent(repo)}`,
+  );
+  await assertOk(response);
+  return response.json() as Promise<BranchesResult>;
+};
+
+/**
+ * Fetch structured diff between two refs with graph-annotated symbols.
+ */
+export const fetchDiff = async (
+  repo: string,
+  base: string,
+  head?: string,
+): Promise<DiffResult> => {
+  const response = await fetchWithTimeout(`${backendUrl}/api/diff`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ base, head, repo }),
+  }, 30_000);
+  await assertOk(response);
+  return response.json() as Promise<DiffResult>;
+};

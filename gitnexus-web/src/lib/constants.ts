@@ -63,19 +63,9 @@ export const getCommunityColor = (communityIndex: number): string => {
   return COMMUNITY_COLORS[communityIndex % COMMUNITY_COLORS.length];
 };
 
-// Labels to show by default (hide imports and variables by default as they clutter)
+// Labels to show by default (only Files — others hidden to reduce clutter)
 export const DEFAULT_VISIBLE_LABELS: NodeLabel[] = [
-  'Project',
-  'Package',
-  'Module',
-  'Folder',
   'File',
-  'Class',
-  'Function',
-  'Method',
-  'Interface',
-  'Enum',
-  'Type',
 ];
 
 // All filterable labels
@@ -111,6 +101,18 @@ export const DEFAULT_VISIBLE_EDGES: EdgeType[] = [
   'IMPLEMENTS',
   'CALLS',
 ];
+
+// Edge type colors for diff mode edge differentiation
+export const EDGE_TYPE_COLORS: Record<string, string> = {
+  CALLS: '#f59e0b',       // Amber
+  IMPORTS: '#3b82f6',     // Blue
+  EXTENDS: '#a855f7',     // Purple
+  IMPLEMENTS: '#a855f7',  // Purple
+  DEFINES: '#6b7280',     // Gray (structural)
+  HAS_METHOD: '#6b7280',  // Gray (structural)
+  HAS_PROPERTY: '#6b7280', // Gray (structural)
+  CONTAINS: '#374151',    // Dark gray (very subtle)
+};
 
 // Edge display info for UI
 export const EDGE_INFO: Record<EdgeType, { color: string; label: string }> = {

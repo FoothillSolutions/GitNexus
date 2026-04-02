@@ -13,8 +13,10 @@ import type { AgentMessage } from '../core/llm/agent';
 import { DEFAULT_VISIBLE_EDGES, type EdgeType } from '../lib/constants';
 import type { RepoSummary, ConnectToServerResult } from '../services/server-connection';
 import { fetchRepos, connectToServer } from '../services/server-connection';
+import type { DiffResult } from '../types/diff';
+import { fetchDiff } from '../services/backend';
 
-export type ViewMode = 'onboarding' | 'loading' | 'exploring';
+export type ViewMode = 'onboarding' | 'loading' | 'branch-picker' | 'exploring';
 export type RightPanelTab = 'code' | 'chat';
 export type EmbeddingStatus = 'idle' | 'loading' | 'embedding' | 'indexing' | 'ready' | 'error';
 
@@ -170,6 +172,47 @@ interface AppState {
   clearAICodeReferences: () => void;
   clearCodeReferences: () => void;
   codeReferenceFocus: CodeReferenceFocus | null;
+
+  // Branch picker (shown before graph init on server connect)
+  pendingServerResult: ConnectToServerResult | null;
+  setPendingServerResult: (result: ConnectToServerResult | null) => void;
+  commitServerConnection: () => void;
+
+  // Diff panel collapse
+  isDiffPanelCollapsed: boolean;
+  toggleDiffPanel: () => void;
+
+  // Diff visualization
+  isDiffMode: boolean;
+  diffData: DiffResult | null;
+  diffLoading: boolean;
+  diffError: string | null;
+  selectedDiffFile: string | null;
+  diffChangedNodeIds: Set<string>;
+  diffAffectedProcessIds: Set<string>;
+  startDiff: (base: string, head?: string) => Promise<void>;
+  exitDiffMode: () => void;
+  setSelectedDiffFile: (filePath: string | null) => void;
+
+  // Diff UX (view modes, bidirectional linking, filtering)
+  diffViewMode: 'focus' | 'structure' | 'review';
+  setDiffViewMode: (mode: 'focus' | 'structure' | 'review') => void;
+  diffFocusedSymbolId: string | null;
+  setDiffFocusedSymbolId: (id: string | null) => void;
+  diffGraphFilter: 'all' | 'impacted';
+  setDiffGraphFilter: (filter: 'all' | 'impacted') => void;
+  diffGraphDepth: number;
+  setDiffGraphDepth: (depth: number) => void;
+  diffRiskChipFilter: string | null;
+  setDiffRiskChipFilter: (category: string | null) => void;
+  diffFileGrouping: 'flat' | 'module' | 'changeType' | 'risk';
+  setDiffFileGrouping: (grouping: 'flat' | 'module' | 'changeType' | 'risk') => void;
+  reviewFlowActive: boolean;
+  setReviewFlowActive: (active: boolean) => void;
+  reviewFlowStep: number;
+  setReviewFlowStep: (step: number) => void;
+  diffFileSortBy: 'changes' | 'risk' | 'alpha' | 'directory';
+  setDiffFileSortBy: (sort: 'changes' | 'risk' | 'alpha' | 'directory') => void;
 }
 
 const AppStateContext = createContext<AppState | null>(null);
@@ -304,6 +347,33 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
   const [codeReferences, setCodeReferences] = useState<CodeReference[]>([]);
   const [isCodePanelOpen, setCodePanelOpen] = useState(false);
   const [codeReferenceFocus, setCodeReferenceFocus] = useState<CodeReferenceFocus | null>(null);
+
+  // Branch picker state (server connect → branch picker → graph init)
+  const [pendingServerResult, setPendingServerResult] = useState<ConnectToServerResult | null>(null);
+
+  // Diff panel collapse
+  const [isDiffPanelCollapsed, setIsDiffPanelCollapsed] = useState(false);
+  const toggleDiffPanel = useCallback(() => setIsDiffPanelCollapsed(prev => !prev), []);
+
+  // Diff visualization state
+  const [isDiffMode, setIsDiffMode] = useState(false);
+  const [diffData, setDiffData] = useState<DiffResult | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [selectedDiffFile, setSelectedDiffFile] = useState<string | null>(null);
+  const [diffChangedNodeIds, setDiffChangedNodeIds] = useState<Set<string>>(new Set());
+  const [diffAffectedProcessIds, setDiffAffectedProcessIds] = useState<Set<string>>(new Set());
+
+  // Diff UX state
+  const [diffViewMode, setDiffViewMode] = useState<'focus' | 'structure' | 'review'>('review');
+  const [diffFocusedSymbolId, setDiffFocusedSymbolId] = useState<string | null>(null);
+  const [diffGraphFilter, setDiffGraphFilter] = useState<'all' | 'impacted'>('all');
+  const [diffGraphDepth, setDiffGraphDepth] = useState<number>(0);
+  const [diffRiskChipFilter, setDiffRiskChipFilter] = useState<string | null>(null);
+  const [diffFileGrouping, setDiffFileGrouping] = useState<'flat' | 'module' | 'changeType' | 'risk'>('flat');
+  const [reviewFlowActive, setReviewFlowActive] = useState(false);
+  const [reviewFlowStep, setReviewFlowStep] = useState(0);
+  const [diffFileSortBy, setDiffFileSortBy] = useState<'changes' | 'risk' | 'alpha' | 'directory'>('changes');
 
     const normalizePath = useCallback((p: string) => {
     return p.replace(/\\/g, '/').replace(/^\.?\//, '');
@@ -1000,6 +1070,13 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setCodeReferences([]);
     setCodePanelOpen(false);
     setCodeReferenceFocus(null);
+    // Clean up diff mode on repo switch
+    setIsDiffMode(false);
+    setDiffData(null);
+    setDiffError(null);
+    setSelectedDiffFile(null);
+    setDiffChangedNodeIds(new Set());
+    setDiffAffectedProcessIds(new Set());
 
     try {
       const result: ConnectToServerResult = await connectToServer(serverBaseUrl, (phase, downloaded, total) => {
@@ -1088,6 +1165,118 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     setCodeReferences([]);
     setCodePanelOpen(false);
     setCodeReferenceFocus(null);
+  }, []);
+
+  // Commit a pending server connection (builds graph, hydrates worker, transitions to exploring)
+  const commitServerConnection = useCallback(() => {
+    const result = pendingServerResult;
+    if (!result) return;
+
+    const repoPath = result.repoInfo.repoPath;
+    const pName = result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
+    setProjectName(pName);
+
+    const kg = createKnowledgeGraph();
+    for (const node of result.nodes) kg.addNode(node);
+    for (const rel of result.relationships) kg.addRelationship(rel);
+    setGraph(kg);
+
+    const fileMap = new Map<string, string>();
+    for (const [p, c] of Object.entries(result.fileContents)) fileMap.set(p, c);
+    setFileContents(fileMap);
+
+    setViewMode('exploring');
+    setProgress(null);
+    setPendingServerResult(null);
+
+    hydrateWorkerFromServer(result.nodes, result.relationships, result.fileContents).then(() => {
+      if (getActiveProviderConfig()) initializeAgent(pName);
+      startEmbeddings().catch((err) => {
+        if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
+          startEmbeddings('wasm').catch(console.warn);
+        } else {
+          console.warn('Embeddings auto-start failed:', err);
+        }
+      });
+    }).catch((err) => {
+      console.warn('Worker hydration failed (non-fatal):', err);
+      if (getActiveProviderConfig()) initializeAgent(pName);
+    });
+  }, [pendingServerResult, setGraph, setFileContents, setProjectName, setViewMode, setProgress, hydrateWorkerFromServer, initializeAgent, startEmbeddings]);
+
+  // Diff visualization actions
+  const startDiff = useCallback(async (base: string, head?: string) => {
+    setDiffLoading(true);
+    setDiffError(null);
+    setIsDiffMode(true);
+    try {
+      const result = await fetchDiff(projectName, base, head);
+      if (result.error) {
+        setDiffError(result.error);
+        return;
+      }
+      setDiffData(result);
+      setDiffChangedNodeIds(new Set(result.changedSymbols.map(s => s.id)));
+      setDiffAffectedProcessIds(new Set(result.affectedProcesses.map(p => p.id)));
+      if (result.files.length > 0) {
+        setSelectedDiffFile(result.files[0].filePath);
+      }
+    } catch (err) {
+      setDiffError(err instanceof Error ? err.message : 'Diff failed');
+    } finally {
+      setDiffLoading(false);
+    }
+  }, [projectName]);
+
+  // Enrich diffChangedNodeIds with File nodes once both graph and diffData are available
+  useEffect(() => {
+    if (!graph || !diffData || !isDiffMode) return;
+    const norm = (p: string) => p.replace(/\\/g, '/').replace(/^\.?\//, '').toLowerCase();
+
+    // Build lookup sets: full paths + filenames
+    const changedFullPaths = new Set(diffData.files.map(f => norm(f.filePath)));
+    const changedFileNames = new Set(diffData.files.map(f => norm(f.filePath).split('/').pop() || ''));
+
+    const extraIds: string[] = [];
+    for (const node of graph.nodes) {
+      if (node.label !== 'File' || !node.properties.filePath) continue;
+      const nodePath = norm(node.properties.filePath);
+      const nodeName = nodePath.split('/').pop() || '';
+
+      // Exact path, suffix match, or filename match
+      const match = changedFullPaths.has(nodePath)
+        || [...changedFullPaths].some(cp => cp.endsWith(nodePath) || nodePath.endsWith(cp))
+        || changedFileNames.has(nodeName);
+
+      if (match) {
+        extraIds.push(node.id);
+      }
+    }
+    if (extraIds.length > 0) {
+      setDiffChangedNodeIds(prev => {
+        const next = new Set(prev);
+        for (const id of extraIds) next.add(id);
+        return next;
+      });
+    }
+  }, [graph, diffData, isDiffMode]);
+
+  const exitDiffMode = useCallback(() => {
+    setIsDiffMode(false);
+    setDiffData(null);
+    setDiffError(null);
+    setSelectedDiffFile(null);
+    setDiffChangedNodeIds(new Set());
+    setDiffAffectedProcessIds(new Set());
+    setDiffViewMode('review');
+    setDiffFocusedSymbolId(null);
+    setDiffGraphFilter('all');
+    setDiffGraphDepth(0);
+    setDiffRiskChipFilter(null);
+    setDiffFileGrouping('flat');
+    setReviewFlowActive(false);
+    setReviewFlowStep(0);
+    setIsDiffPanelCollapsed(false);
   }, []);
 
   const toggleLabelVisibility = useCallback((label: NodeLabel) => {
@@ -1198,6 +1387,43 @@ export const AppStateProvider = ({ children }: { children: ReactNode }) => {
     clearAICodeReferences,
     clearCodeReferences,
     codeReferenceFocus,
+    // Branch picker
+    pendingServerResult,
+    setPendingServerResult,
+    commitServerConnection,
+    // Diff panel collapse
+    isDiffPanelCollapsed,
+    toggleDiffPanel,
+    // Diff visualization
+    isDiffMode,
+    diffData,
+    diffLoading,
+    diffError,
+    selectedDiffFile,
+    diffChangedNodeIds,
+    diffAffectedProcessIds,
+    startDiff,
+    exitDiffMode,
+    setSelectedDiffFile,
+    // Diff UX
+    diffViewMode,
+    setDiffViewMode,
+    diffFocusedSymbolId,
+    setDiffFocusedSymbolId,
+    diffGraphFilter,
+    setDiffGraphFilter,
+    diffGraphDepth,
+    setDiffGraphDepth,
+    diffRiskChipFilter,
+    setDiffRiskChipFilter,
+    diffFileGrouping,
+    setDiffFileGrouping,
+    reviewFlowActive,
+    setReviewFlowActive,
+    reviewFlowStep,
+    setReviewFlowStep,
+    diffFileSortBy,
+    setDiffFileSortBy,
   };
 
   return (

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AppStateProvider, useAppState } from './hooks/useAppState';
 import { DropZone } from './components/DropZone';
 import { LoadingOverlay } from './components/LoadingOverlay';
@@ -9,6 +9,10 @@ import { SettingsPanel } from './components/SettingsPanel';
 import { StatusBar } from './components/StatusBar';
 import { FileTreePanel } from './components/FileTreePanel';
 import { CodeReferencesPanel } from './components/CodeReferencesPanel';
+import { DiffPanel } from './components/diff';
+import { DiffStructureOverlay } from './components/diff/DiffStructureOverlay';
+import { BranchDiffDialog } from './components/BranchDiffDialog';
+import { KeyboardShortcutsDialog } from './components/KeyboardShortcutsDialog';
 import { FileEntry } from './services/zip';
 import { getActiveProviderConfig } from './core/llm/settings-service';
 import { createKnowledgeGraph } from './core/graph/graph';
@@ -41,9 +45,26 @@ const AppContent = () => {
     setAvailableRepos,
     switchRepo,
     hydrateWorkerFromServer,
+    isDiffMode,
+    diffData,
+    diffLoading,
+    diffError,
+    diffViewMode,
+    setDiffViewMode,
+    setPendingServerResult,
+    isDiffPanelCollapsed,
+    toggleDiffPanel,
+    startDiff,
+    commitServerConnection,
+    setDiffGraphFilter,
+    pendingServerResult,
+    selectedDiffFile,
+    setSelectedDiffFile,
+    exitDiffMode,
   } = useAppState();
 
   const graphCanvasRef = useRef<GraphCanvasHandle>(null);
+  const [isShortcutsDialogOpen, setIsShortcutsDialogOpen] = useState(false);
 
   const handleFileSelect = useCallback(async (file: File) => {
     const projectName = file.name.replace('.zip', '');
@@ -134,63 +155,29 @@ const AppContent = () => {
   }, [setViewMode, setGraph, setFileContents, setProgress, setProjectName, runPipelineFromFiles, startEmbeddings, initializeAgent]);
 
   const handleServerConnect = useCallback((result: ConnectToServerResult) => {
-    // Extract project name from repoPath
+    // Store result and set project name (needed for fetchBranches), then show branch picker
     const repoPath = result.repoInfo.repoPath;
-    const projectName = repoPath.split('/').pop() || 'server-project';
-    setProjectName(projectName);
-
-    // Build KnowledgeGraph from server data (bypasses WASM pipeline entirely)
-    const graph = createKnowledgeGraph();
-    for (const node of result.nodes) {
-      graph.addNode(node);
-    }
-    for (const rel of result.relationships) {
-      graph.addRelationship(rel);
-    }
-    setGraph(graph);
-
-    // Set file contents from extracted File node content
-    const fileMap = new Map<string, string>();
-    for (const [path, content] of Object.entries(result.fileContents)) {
-      fileMap.set(path, content);
-    }
-    setFileContents(fileMap);
-
-    // Transition directly to exploring view
-    setViewMode('exploring');
+    const pName = result.repoInfo.name || repoPath.split('/').pop() || 'server-project';
+    setProjectName(pName);
+    setPendingServerResult(result);
     setProgress(null);
-
-    // Hydrate the worker-side DB (LadybugDB + BM25) so Query/Processes/embeddings work
-    hydrateWorkerFromServer(result.nodes, result.relationships, result.fileContents).then(() => {
-      // Initialize agent if LLM is configured
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-
-      // Auto-start embeddings (now that LadybugDB is ready)
-      startEmbeddings().catch((err) => {
-        if (err?.name === 'WebGPUNotAvailableError' || err?.message?.includes('WebGPU')) {
-          startEmbeddings('wasm').catch(console.warn);
-        } else {
-          console.warn('Embeddings auto-start failed:', err);
-        }
-      });
-    }).catch((err) => {
-      console.warn('Worker hydration failed (non-fatal):', err);
-      // Still initialize agent even if hydration fails
-      if (getActiveProviderConfig()) {
-        initializeAgent(projectName);
-      }
-    });
-  }, [setViewMode, setGraph, setFileContents, setProjectName, setProgress, initializeAgent, startEmbeddings, hydrateWorkerFromServer]);
+    setViewMode('branch-picker');
+  }, [setViewMode, setProjectName, setProgress, setPendingServerResult]);
 
   // Auto-connect when ?server query param is present (bookmarkable shortcut)
   const autoConnectRan = useRef(false);
+  const pendingAutoDiff = useRef<{ base: string; head?: string } | null>(null);
   useEffect(() => {
     if (autoConnectRan.current) return;
     const params = new URLSearchParams(window.location.search);
     if (!params.has('server')) return;
     autoConnectRan.current = true;
+
+    const autoDiffBase = params.get('base');
+    const autoDiffHead = params.get('head');
+    if (autoDiffBase) {
+      pendingAutoDiff.current = { base: autoDiffBase, head: autoDiffHead || undefined };
+    }
 
     // Clean the URL so a refresh won't re-trigger
     const cleanUrl = window.location.pathname + window.location.hash;
@@ -239,6 +226,17 @@ const AppContent = () => {
     });
   }, [handleServerConnect, setProgress, setViewMode, setServerBaseUrl, setAvailableRepos]);
 
+  // Auto-diff: when branch-picker shows and we have pending auto-diff params, skip it
+  // Must wait for pendingServerResult so commitServerConnection has the data it needs
+  useEffect(() => {
+    if (viewMode !== 'branch-picker' || !pendingAutoDiff.current || !pendingServerResult) return;
+    const { base, head } = pendingAutoDiff.current;
+    pendingAutoDiff.current = null;
+    commitServerConnection();
+    setDiffGraphFilter('impacted');
+    startDiff(base, head);
+  }, [viewMode, pendingServerResult, commitServerConnection, setDiffGraphFilter, startDiff]);
+
   const handleFocusNode = useCallback((nodeId: string) => {
     graphCanvasRef.current?.focusNode(nodeId);
   }, []);
@@ -249,6 +247,78 @@ const AppContent = () => {
     refreshLLMSettings();
     initializeAgent();
   }, [refreshLLMSettings, initializeAgent]);
+
+  // View mode keyboard shortcuts (1/2/3) — must be before conditional returns
+  useEffect(() => {
+    if (!isDiffMode) return;
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === '1') setDiffViewMode('focus');
+      else if (e.key === '2') setDiffViewMode('structure');
+      else if (e.key === '3') setDiffViewMode('review');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isDiffMode, setDiffViewMode]);
+
+  // Step 5: Global keyboard shortcuts for diff navigation
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+
+      // ? — show keyboard shortcuts dialog (works always)
+      if (e.key === '?') {
+        e.preventDefault();
+        setIsShortcutsDialogOpen(prev => !prev);
+        return;
+      }
+
+      // Escape — close shortcuts dialog first, then exit diff mode
+      if (e.key === 'Escape') {
+        if (isShortcutsDialogOpen) {
+          setIsShortcutsDialogOpen(false);
+          return;
+        }
+        if (isDiffMode) {
+          exitDiffMode();
+          return;
+        }
+      }
+
+      if (!isDiffMode || !diffData) return;
+
+      // [ — previous file
+      if (e.key === '[') {
+        const idx = diffData.files.findIndex(f => f.filePath === selectedDiffFile);
+        if (idx > 0) {
+          setSelectedDiffFile(diffData.files[idx - 1].filePath);
+        }
+        return;
+      }
+
+      // ] — next file
+      if (e.key === ']') {
+        const idx = diffData.files.findIndex(f => f.filePath === selectedDiffFile);
+        if (idx < diffData.files.length - 1) {
+          setSelectedDiffFile(diffData.files[idx + 1].filePath);
+        }
+        return;
+      }
+
+      // f — toggle diff panel (file list)
+      if (e.key === 'f') {
+        toggleDiffPanel();
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [isDiffMode, diffData, selectedDiffFile, setSelectedDiffFile, exitDiffMode, toggleDiffPanel, isShortcutsDialogOpen]);
+
+  const isFocusMode = isDiffMode && diffViewMode === 'focus';
+  const isStructureMode = isDiffMode && diffViewMode === 'structure';
 
   // Render based on view mode
   if (viewMode === 'onboarding') {
@@ -277,29 +347,66 @@ const AppContent = () => {
     return <LoadingOverlay progress={progress} />;
   }
 
+  if (viewMode === 'branch-picker') {
+    return <BranchDiffDialog />;
+  }
+
   // Exploring view
   return (
     <div className="flex flex-col h-screen bg-void overflow-hidden">
       <Header onFocusNode={handleFocusNode} availableRepos={availableRepos} onSwitchRepo={switchRepo} />
 
       <main className="flex-1 flex min-h-0">
-        {/* Left Panel - File Tree */}
-        <FileTreePanel onFocusNode={handleFocusNode} />
+        {/* Left Panel - File Tree (hidden in focus mode) */}
+        {!isFocusMode && <FileTreePanel onFocusNode={handleFocusNode} />}
 
         {/* Graph area - takes remaining space */}
-        <div className="flex-1 relative min-w-0">
-          <GraphCanvas ref={graphCanvasRef} />
+        <div className="flex-1 relative min-w-0 overflow-hidden">
+          {/* Graph (hidden in focus mode) */}
+          {!isFocusMode && <GraphCanvas ref={graphCanvasRef} />}
 
-          {/* Code References Panel (overlay) - does NOT resize the graph, it overlaps on top */}
-          {isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
-            <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
-              <CodeReferencesPanel onFocusNode={handleFocusNode} />
-            </div>
+          {/* Diff Panel */}
+          {isDiffMode && (diffData || diffLoading || diffError) ? (
+            isFocusMode ? (
+              // Focus mode: DiffPanel fills entire area
+              <DiffPanel onFocusNode={handleFocusNode} fullWidth />
+            ) : isStructureMode ? (
+              // Structure mode: floating stats overlay on graph
+              <div className="absolute top-4 left-4 z-30 pointer-events-auto">
+                <DiffStructureOverlay />
+              </div>
+            ) : (
+              // Review mode: collapsible overlay on left side of graph
+              <>
+                <div
+                  className="absolute inset-y-0 left-0 z-30 pointer-events-auto transition-transform duration-300 ease-in-out"
+                  style={{ transform: isDiffPanelCollapsed ? 'translateX(-100%)' : 'translateX(0)' }}
+                >
+                  <DiffPanel onFocusNode={handleFocusNode} />
+                </div>
+                {isDiffPanelCollapsed && (
+                  <button
+                    onClick={toggleDiffPanel}
+                    className="absolute left-0 top-4 z-30 w-7 h-20 flex items-center justify-center bg-surface/90 border border-l-0 border-border-subtle rounded-r-lg text-text-secondary hover:bg-hover hover:text-amber-300 transition-colors pointer-events-auto backdrop-blur-sm"
+                    title="Expand diff panel"
+                  >
+                    <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="9 18 15 12 9 6" /></svg>
+                  </button>
+                )}
+              </>
+            )
+          ) : (
+            /* Code References Panel (overlay) - does NOT resize the graph, it overlaps on top */
+            isCodePanelOpen && (codeReferences.length > 0 || !!selectedNode) && (
+              <div className="absolute inset-y-0 left-0 z-30 pointer-events-auto">
+                <CodeReferencesPanel onFocusNode={handleFocusNode} />
+              </div>
+            )
           )}
         </div>
 
-        {/* Right Panel - Code & Chat (tabbed) */}
-        {isRightPanelOpen && <RightPanel />}
+        {/* Right Panel - Code & Chat (hidden in focus mode) */}
+        {!isFocusMode && isRightPanelOpen && <RightPanel />}
       </main>
 
       <StatusBar />
@@ -309,6 +416,12 @@ const AppContent = () => {
         isOpen={isSettingsPanelOpen}
         onClose={() => setSettingsPanelOpen(false)}
         onSettingsSaved={handleSettingsSaved}
+      />
+
+      {/* Step 5: Keyboard shortcuts dialog */}
+      <KeyboardShortcutsDialog
+        isOpen={isShortcutsDialogOpen}
+        onClose={() => setIsShortcutsDialogOpen(false)}
       />
 
     </div>
