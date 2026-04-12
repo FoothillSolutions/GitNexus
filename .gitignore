@@ -72,3 +72,14 @@ GitNexus.sln
 .worktrees/
 
 /github/scripts/triage/__pycache__/
+
+# .NET / C# build artifacts and user-specific files
+**/[Bb]in/
+**/[Oo]bj/
+.vs/
+TestResults/
+*.user
+*.rsuser
+*.suo
+*.userosscache
+*.sln.docstates
