@@ -65,6 +65,7 @@ export function Toolbar({ onFitAll }: ToolbarProps) {
       )}
 
       <div style={{ marginLeft: 'auto', display: 'flex', gap: '6px', alignItems: 'center' }}>
+        <SwitchVizButton />
         <ToolbarButton
           onClick={() => { layoutLocked.value = !layoutLocked.value; }}
           active={layoutLocked.value}
@@ -136,6 +137,16 @@ function ToolbarButton({ onClick, children, active }: { onClick: () => void; chi
     >
       {children}
     </button>
+  );
+}
+
+function SwitchVizButton() {
+  const m = window.location.pathname.match(/\/api\/workflows\/([^/]+)\/codeatlas/);
+  if (!m) return null;
+  return (
+    <ToolbarButton onClick={() => { window.location.href = '/api/workflows/' + m[1] + '/tsmorph'; }}>
+      Switch to TSMorph
+    </ToolbarButton>
   );
 }
 

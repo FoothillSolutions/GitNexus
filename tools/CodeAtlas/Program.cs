@@ -1,6 +1,3 @@
-using Microsoft.Build.Locator;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.MSBuild;
 using System.Text.Json;
 
 using CodeAtlas;
@@ -14,52 +11,75 @@ async Task<int> RunMrMode(string[] a)
     var repoIdx = Array.IndexOf(a, "--repo");
     string? repoPath = repoIdx >= 0 && repoIdx + 1 < a.Length ? a[repoIdx + 1] : null;
 
-    string? sln;
-    if (repoPath is not null)
+    string? sln = null;
+    bool noRoslyn = a.Contains("--no-roslyn");
+
+    if (!noRoslyn)
     {
-        var fullRepoPath = Path.GetFullPath(repoPath);
-        sln = Directory.GetFiles(fullRepoPath, "*.sln").FirstOrDefault();
-        if (sln is null)
+        if (repoPath is not null)
         {
-            Console.Error.WriteLine($"No .sln file found in: {fullRepoPath}");
-            return 1;
+            var fullRepoPath = Path.GetFullPath(repoPath);
+            sln = Directory.GetFiles(fullRepoPath, "*.sln").FirstOrDefault();
+            if (sln is null)
+            {
+                Console.Error.WriteLine($"No .sln file found in: {fullRepoPath} — running in diff-only mode");
+                noRoslyn = true;
+            }
         }
-    }
-    else
-    {
-        sln = a.FirstOrDefault(x => x.EndsWith(".sln")) ?? FindSolutionPath();
+        else
+        {
+            sln = a.FirstOrDefault(x => x.EndsWith(".sln")) ?? FindSolutionPath();
+            if (sln is null)
+            {
+                Console.Error.WriteLine("No .sln found — running in diff-only mode (no semantic analysis)");
+                noRoslyn = true;
+            }
+        }
     }
 
     var mrIdx = Array.IndexOf(a, "--mr");
     var branchOrId = mrIdx >= 0 && mrIdx + 1 < a.Length ? a[mrIdx + 1] : null;
 
-    if (sln is null || branchOrId is null)
+    if (branchOrId is null)
     {
-        Console.Error.WriteLine("Usage: CodeAtlas --mr <branch-or-mr-id> [--repo <repo-path>]");
+        Console.Error.WriteLine("Usage: CodeAtlas --mr <branch-or-mr-id> [--repo <repo-path>] [--no-roslyn]");
         Console.Error.WriteLine("       CodeAtlas <solution.sln> --mr <branch-or-mr-id>");
         return 1;
     }
 
-    Console.Error.WriteLine($"Solution: {sln}");
-    Console.Error.WriteLine($"MR/Branch: {branchOrId}");
+    var workingDir = repoPath is not null ? Path.GetFullPath(repoPath) : (sln is not null ? Path.GetDirectoryName(sln)! : Directory.GetCurrentDirectory());
 
-    MSBuildLocator.RegisterDefaults();
-    Console.Error.WriteLine("Loading solution...");
-    using var ws = MSBuildWorkspace.Create();
-    ws.WorkspaceFailed += (_, e) =>
+    MrGraph mrGraph;
+
+    if (noRoslyn)
     {
-        if (e.Diagnostic.Kind == WorkspaceDiagnosticKind.Failure)
-            Console.Error.WriteLine($"  Workspace error: {e.Diagnostic.Message}");
-    };
-    var solution = await ws.OpenSolutionAsync(sln);
-    Console.Error.WriteLine($"Loaded {solution.Projects.Count()} projects.");
+        Console.Error.WriteLine($"Mode: diff-only (no Roslyn)");
+        Console.Error.WriteLine($"MR/Branch: {branchOrId}");
+        var analyzer = new MrAnalyzerLite(workingDir);
+        mrGraph = await analyzer.AnalyzeAsync(branchOrId);
+    }
+    else
+    {
+        Console.Error.WriteLine($"Solution: {sln}");
+        Console.Error.WriteLine($"MR/Branch: {branchOrId}");
 
-    var analyzer = new MrAnalyzer(solution, sln);
-    var mrGraph = await analyzer.AnalyzeAsync(branchOrId);
+        Microsoft.Build.Locator.MSBuildLocator.RegisterDefaults();
+        Console.Error.WriteLine("Loading solution...");
+        using var ws = Microsoft.CodeAnalysis.MSBuild.MSBuildWorkspace.Create();
+        ws.WorkspaceFailed += (_, e) =>
+        {
+            if (e.Diagnostic.Kind == Microsoft.CodeAnalysis.WorkspaceDiagnosticKind.Failure)
+                Console.Error.WriteLine($"  Workspace error: {e.Diagnostic.Message}");
+        };
+        var solution = await ws.OpenSolutionAsync(sln!);
+        Console.Error.WriteLine($"Loaded {solution.Projects.Count()} projects.");
+
+        var analyzer = new MrAnalyzer(solution, sln!);
+        mrGraph = await analyzer.AnalyzeAsync(branchOrId);
+    }
 
     // Load canvas config from repo directory
-    var configDir = repoPath is not null ? Path.GetFullPath(repoPath) : Path.GetDirectoryName(sln) ?? Directory.GetCurrentDirectory();
-    mrGraph.Config = LoadConfig(configDir);
+    mrGraph.Config = LoadConfig(workingDir);
 
     Console.Error.WriteLine($"MR: {mrGraph.Files.Count} files, {mrGraph.Edges.Count} edges");
 
